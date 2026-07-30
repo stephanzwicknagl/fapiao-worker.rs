@@ -1,4 +1,10 @@
+mod extract;
+
+use std::io;
+use thiserror::Error;
 use wasm_bindgen::prelude::*;
+
+type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[wasm_bindgen]
 pub fn greet(name: &str) -> String {
@@ -6,8 +12,24 @@ pub fn greet(name: &str) -> String {
 }
 
 #[wasm_bindgen]
-pub fn parse_pdf(bytes: &[u8]) -> String {
-  format!("Got {} bytes", bytes.len())
+pub fn parse_pdf(bytes: &[u8]) -> Result<String, JsError> {
+  let text = extract::extract(bytes)?;
+  Ok(text)
+}
+
+#[derive(Debug, Error)]
+enum Error {
+  #[error(transparent)]
+  IoError(#[from] io::Error),
+
+  #[error(transparent)]
+  GitError(#[from] lopdf::Error),
+  //
+  //   #[error(transparent)]
+  //   FromUtf8Error(#[from] FromUtf8Error),
+  //
+  //   #[error("invalid input '{0}'")]
+  //   InvalidInput(char),
 }
 
 #[cfg(test)]
