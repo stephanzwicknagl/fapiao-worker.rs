@@ -24,12 +24,15 @@ enum Error {
 
   #[error(transparent)]
   GitError(#[from] lopdf::Error),
-  //
-  //   #[error(transparent)]
-  //   FromUtf8Error(#[from] FromUtf8Error),
-  //
-  //   #[error("invalid input '{0}'")]
-  //   InvalidInput(char),
+
+  #[error(transparent)]
+  RegexError(#[from] regex::Error),
+
+  #[error("can't parse fapiao from page {0}'")]
+  FapiaoParseError(u32),
+
+  #[error(transparent)]
+  ParseIntError(#[from] std::num::ParseIntError),
 }
 
 #[cfg(test)]

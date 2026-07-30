@@ -12,3 +12,4 @@ lopdf = "0.44.0"
 getrandom = {version = "0.4.3", features = ["wasm_js"]}
 thiserror = "2.0.18"
 simple-datetime-rs = "0.3.0"
+regex = "1.13.1"
