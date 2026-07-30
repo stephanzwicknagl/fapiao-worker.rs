@@ -5,6 +5,11 @@ pub fn greet(name: &str) -> String {
   format!("Hello from Rust, {name}!")
 }
 
+#[wasm_bindgen]
+pub fn parse_pdf(bytes: &[u8]) -> String {
+  format!("Got {} bytes", bytes.len())
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

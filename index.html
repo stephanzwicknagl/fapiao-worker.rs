@@ -1,5 +1,147 @@
-<script type="module">
-  import init, { greet } from "./pkg/fapiao_worker.js";
-  await init();
-  console.log(greet("Steph"));
-</script>
+<!doctype html>
+<html lang="en" color-mode="user">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fapiao Claim Form Processor</title>
+  <link rel="stylesheet" href="https://unpkg.com/mvp.css">
+  <style>
+    body {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .error-box {
+      background: #c0392b;
+      color: #fff;
+      border-radius: var(--border-radius);
+      padding: 0.75rem 1rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.9rem;
+    }
+
+    form small { display: block; }
+    .spinner { display: none; }
+    form.loading .spinner { display: inline; }
+    form.loading button[type=submit] { opacity: 0.6; pointer-events: none; }
+
+    .overlay {
+      display: flex;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(2px);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.3s ease, visibility 0.3s ease;
+    }
+    .overlay.active { opacity: 1; visibility: visible; }
+    .overlay-content {
+      background: var(--color-bg);
+      padding: 2rem;
+      border-radius: var(--border-radius);
+      text-align: center;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+    .overlay-spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid var(--color-bg-secondary);
+      border-top-color: var(--color-link);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 1rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Styles for injected categorize form */
+    form { max-width: 100%; min-width: unset; }
+    .seller-name { font-family: monospace; font-size: 0.95rem; }
+    .fapiao-count { color: var(--color-text-secondary); font-size: 0.85rem; white-space: nowrap; }
+    .fapiao-numbers { font-family: monospace; font-size: 0.8rem; color: var(--color-text-secondary); }
+    .mapped-section { margin-top: 2rem; }
+    .mapped-category { color: var(--color-text-secondary); font-size: 0.9rem; }
+    #success-panel { text-align: center; padding: 2rem 0; }
+    #success-panel p { margin-bottom: 1.5rem; }
+    #success-panel .success-actions { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+  </style>
+  <!-- <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}"> -->
+  <!-- <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', -->
+  <!-- filename='favicon-32x32.png') }}"> -->
+  <!-- <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', -->
+  <!-- filename='favicon-16x16.png') }}"> -->
+</head>
+<body>
+  <header>
+    <!-- <a href="/"> -->
+    <!--   <picture> -->
+    <!--     <source media="(prefers-color-scheme: dark)" srcset="{{ url_for('static', filename='images/default-monochrome-white.svg') }}"> -->
+    <!--     <img src="{{ url_for('static', filename='images/default-monochrome.svg') }}" alt="fapiao worker" height="52"> -->
+    <!--   </picture> -->
+    <!-- </a> -->
+    <h1>Fapiao Claim Form Processor</h1>
+    <p>Upload your fapiao PDFs and the Excel template — get back a filled claim form.</p>
+  </header>
+
+  <main>
+    <!-- {% if error %} -->
+    <!-- <div class="error-box" role="alert"> -->
+    <!--   <strong>Error:</strong> {{ error }} -->
+    <!-- </div> -->
+    <!-- {% endif %} -->
+
+    <!-- <form method="POST" action="/process" enctype="multipart/form-data"> -->
+    <!--   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"> -->
+    <!---->
+    <!--   <label for="pdfs">Fapiao PDFs</label> -->
+    <!--   <input type="file" id="pdfs" name="pdfs" accept=".pdf" multiple required> -->
+    <!--   <small>Select one or more PDF files.</small> -->
+    <!---->
+    <!--   <label for="excel">Excel template</label> -->
+    <!--   <input type="file" id="excel" name="excel" accept=".xlsx" required> -->
+    <!--   <small>The VAT Reimbursement Claim Form (.xlsx). The original is never modified.</small> -->
+    <!---->
+    <!--   <button type="submit"> -->
+    <!--     <span class="spinner" aria-hidden="true">⏳ </span> -->
+    <!--     <span class="label">Process and download</span> -->
+    <!--   </button> -->
+    <!---->
+    <!-- </form> -->
+    <input type="file" id="file-input" accept=".pdf">
+
+    <p id="form-note"><small>Note: the form holds up to 40 entries. Pages that cannot be read are skipped automatically.</small></p>
+
+    <p id="result"></p>
+  </main>
+
+  <div class="overlay" id="processing-overlay">
+    <div class="overlay-content">
+      <div class="overlay-spinner"></div>
+      <p><strong>Processing fapiaos...</strong></p>
+      <p><small>This may take a moment</small></p>
+    </div>
+  </div>
+
+  <footer>Fapiao Worker — uploaded files are processed in memory and never stored.</footer>
+
+  <script type="module">
+    import init, {parse_pdf} from "./pkg/fapiao_worker.js"
+    await init();
+
+    document.querySelector("#file-input").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      console.log(parse_pdf(bytes));
+    });
+  </script>
+
+</body>
+</html>
