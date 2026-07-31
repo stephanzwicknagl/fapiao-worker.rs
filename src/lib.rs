@@ -33,6 +33,12 @@ enum Error {
 
   #[error(transparent)]
   ParseIntError(#[from] std::num::ParseIntError),
+
+  #[error(transparent)]
+  DateError(#[from] simple_datetime_rs::DateError),
+
+  #[error(transparent)]
+  ParseFloatError(#[from] std::num::ParseFloatError),
 }
 
 #[cfg(test)]
