@@ -20,6 +20,9 @@ pub fn extract(bytes: &[u8]) -> Result<String> {
 }
 
 fn parse_fapiao(text: String) -> Result<Fapiao> {
+  // Normalize full-width characters to ASCII
+  let text = normalize_fullwidth(&text);
+
   // GARBLED DETECTION
   // All valid fapiaos have a date with 年
   let re = Regex::new("年")?;
@@ -140,10 +143,7 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
   }
 
   // ── VAT AMOUNT ─────────────────────────────────────────────────────────────
-  let amt_float = fapiao
-    .amount
-    .as_ref()
-    .and_then(|a| a.parse::<f32>().ok());
+  let amt_float = fapiao.amount.as_ref().and_then(|a| a.parse::<f32>().ok());
   let strategies: [fn(&str, Option<f32>) -> Result<Option<String>>; 6] = [
     v1_inline,
     v2_heji_prefix,
@@ -391,6 +391,30 @@ fn v7_railway(amount: &Option<String>) -> Result<Option<String>> {
     return Ok(Some(format!("{:.2}", amount_float * 3.0 / 103_f32)));
   }
   Ok(None)
+}
+
+/// Convert full-width characters to ASCII equivalents.
+fn normalize_fullwidth(text: &str) -> String {
+  text
+    .chars()
+    .map(|c| match c {
+      '０'..='９' => shift(c, '０', '0'),
+      'Ａ'..='Ｚ' => shift(c, 'Ａ', 'A'),
+      'ａ'..='ｚ' => shift(c, 'ａ', 'a'),
+      '．' => '.',
+      '，' => ',',
+      '：' => ':',
+      '；' => ';',
+      '（' => '(',
+      '）' => ')',
+      '￥' => '¥',
+      _ => c,
+    })
+    .collect()
+}
+
+fn shift(c: char, from: char, to: char) -> char {
+  char::from_u32(c as u32 - from as u32 + to as u32).unwrap_or(c)
 }
 
 fn clean(str: &str) -> String {
@@ -657,7 +681,6 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "amount extraction not yet implemented"]
   fn test_amount_none_when_not_found() -> Result<()> {
     let result = parse("年\n2024年1月1日\n名称：测试公司有限公司")?;
     assert!(result.amount.is_none());
@@ -708,7 +731,6 @@ mod tests {
   // ── full parse integration ─────────────────────────────────────────────────
 
   #[test]
-  #[ignore = "full parse not yet implemented"]
   fn test_full_parse_walmart_style() -> Result<()> {
     let result = parse(
       "发票号码：012345678901234\n2024年3月15日\n（小写）¥188.50\n合     计  ¥176.17  ¥12.33\n名称：沃尔玛（湖北）商业零售有限公司\n年\n",
@@ -724,7 +746,6 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "full parse not yet implemented"]
   fn test_full_parse_metro_style() -> Result<()> {
     let result = parse(
       "发票号码：012345678901235\n2024年6月1日\n94.34\n5.66\n100.00\n美国驻武汉总领事馆\n上海麦德龙商贸有限公司武汉分公司\n年\n",
@@ -739,7 +760,6 @@ mod tests {
   // ── railway e-ticket parsing ───────────────────────────────────────────────
 
   #[test]
-  #[ignore = "railway parsing not yet implemented"]
   fn test_railway_ticket_fullwidth_parsing() -> Result<()> {
     let result = parse(
       "发票号码：２６４４９１２４０８８０００２０８４３８\n开票日期：２０２６年０６月２２日\n电子发票（铁路电子客票）\n票价：￥１３４．００\n买票请到12306 发货请到95306\n中国铁路祝您旅途愉快\n",
@@ -756,7 +776,6 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "railway parsing not yet implemented"]
   fn test_railway_ticket_vat_calculation() -> Result<()> {
     // Railway ticket VAT is calculated at 3%: 103 * 3 / 103 = 3.0
     let result = parse(
@@ -768,7 +787,6 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "railway parsing not yet implemented"]
   fn test_railway_ticket_vat_calculation_rounding() -> Result<()> {
     // VAT = 134 * 3 / 103 = 3.9029... ≈ 3.90
     let result = parse(
@@ -779,7 +797,6 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "railway parsing not yet implemented"]
   fn test_regular_fapiao_not_affected_by_railway_logic() -> Result<()> {
     // Regular fapiaos use extracted VAT, not the railway calculation.
     let result = parse(
