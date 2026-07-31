@@ -32,6 +32,7 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
       date: None,
       amount: None,
       vat_amount: None,
+      seller: None,
       products: None,
       skip: true,
       skip_reason: Some("garbled text".to_string()),
@@ -54,6 +55,7 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
         date: None,
         amount: None,
         vat_amount: None,
+        seller: None,
         products: None,
         skip: true,
         skip_reason: Some(format!("page {} of {}", current.as_str(), total.as_str())),
@@ -65,6 +67,7 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
     date: None,
     amount: None,
     vat_amount: None,
+    seller: None,
     products: None,
     skip: false,
     skip_reason: None,
@@ -167,6 +170,13 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
       fapiao.vat_amount = Some(a);
     }
   }
+
+  // ── SELLER ─────────────────────────────────────────────────────────────────
+  fapiao.seller = extract_seller(&text)?;
+
+  // ── PRODUCTS ───────────────────────────────────────────────────────────────
+  fapiao.products = Some(extract_products(&text)?);
+
   Ok(fapiao)
 }
 
@@ -220,8 +230,6 @@ fn s4_daxie_suffix(text: &str) -> Result<Option<String>> {
 }
 
 /// S4b: Restaurant format: 大写\nT\nP\nV where T = P + V.
-/// Rust's regex crate has no lookahead, so the Python `(?![¥￥])` guards are
-/// approximated with optional/mandatory ¥ prefixes per line.
 fn s4b_restaurant(text: &str) -> Result<Option<String>> {
   let re = Regex::new(&format!(
     r"{}\n[¥￥]*({})\n[¥￥]*({})\n[¥￥]*({})",
@@ -233,16 +241,19 @@ fn s4b_restaurant(text: &str) -> Result<Option<String>> {
   total_matches(caps.get(1), caps.get(2), caps.get(3))
 }
 
-/// S5: Metro/Makro format  ── three bare numbers before buyer name: P\nV\nT\n美国
+/// S5: Metro/Makro format  ── three bare numbers (P, V, T with T = P + V)
+/// followed by a non-numeric line (the buyer/seller name block).
 fn s5_metro(text: &str) -> Result<Option<String>> {
   let re = Regex::new(&format!(
-    r"({})\n({})\n({})\n(?:美国|美利坚)",
+    r"({})[ \t]*\n[ \t]*({})[ \t]*\n[ \t]*({})[ \t]*\n[ \t]*[^\d\n]",
     NUM, NUM, NUM
   ))?;
-  let Some(caps) = re.captures(text) else {
-    return Ok(None);
-  };
-  total_matches(caps.get(3), caps.get(1), caps.get(2))
+  for caps in re.captures_iter(text) {
+    if let Some(t) = total_matches(caps.get(3), caps.get(1), caps.get(2))? {
+      return Ok(Some(t));
+    }
+  }
+  Ok(None)
 }
 
 /// S6: Bare-¥ triplet  ── Domino's format: T\n¥  P\n¥  V\n¥ (scattered)
@@ -334,17 +345,16 @@ fn v4_daxie_suffix(text: &str, _amt: Option<f32>) -> Result<Option<String>> {
   Ok(None)
 }
 
-// V5: Metro/Makro format  ── P\nV\nT\n美国 (second number = VAT)
+// V5: Metro/Makro format  ── P\nV\nT + non-numeric line (second number = VAT)
 fn v5_bare_yen_triplet(text: &str, _amt: Option<f32>) -> Result<Option<String>> {
   let re = Regex::new(&format!(
-    r"({})\n({})\n({})\n(?:美国|美利坚)",
+    r"({})[ \t]*\n[ \t]*({})[ \t]*\n[ \t]*({})[ \t]*\n[ \t]*[^\d\n]",
     NUM, NUM, NUM
   ))?;
-  let Some(caps) = re.captures(text) else {
-    return Ok(None);
-  };
-  if total_matches(caps.get(3), caps.get(1), caps.get(2))?.is_some() {
-    return Ok(caps.get(2).map(|v| clean(v.as_str())));
+  for caps in re.captures_iter(text) {
+    if total_matches(caps.get(3), caps.get(1), caps.get(2))?.is_some() {
+      return Ok(caps.get(2).map(|v| clean(v.as_str())));
+    }
   }
   Ok(None)
 }
@@ -417,6 +427,83 @@ fn shift(c: char, from: char, to: char) -> char {
   char::from_u32(c as u32 - from as u32 + to as u32).unwrap_or(c)
 }
 
+/// Identify the buyer structurally: the first 名称 following the 购买方
+/// (buyer info) section marker, which fapiaos often print vertically as
+/// 购\n买\n方\n信\n息.
+fn extract_buyer(text: &str) -> Result<Option<String>> {
+  let re = Regex::new(r"购\s*买\s*方[\s\S]*?名称[：:][ \t]*([^\n]+)")?;
+  Ok(
+    re.captures(text)
+      .and_then(|c| c.get(1))
+      .map(|m| m.as_str().trim().to_string()),
+  )
+}
+
+/// Extract the seller name from fapiao text.
+fn extract_seller(text: &str) -> Result<Option<String>> {
+  let buyer = extract_buyer(text)?;
+
+  // Pattern 1: explicit 名称：<seller> on the same line (DiDi-style fapiaos).
+  let re = Regex::new(r"名称[：:][ \t]*([^\n]+)")?;
+  for caps in re.captures_iter(text) {
+    let Some(m) = caps.get(1) else { continue };
+    let name = m.as_str().trim();
+    if name.chars().count() > 255 {
+      continue;
+    }
+    if name.is_empty() || name.contains("名称") || buyer.as_deref() == Some(name) {
+      continue;
+    }
+    return Ok(Some(name.to_string()));
+  }
+
+  // Pattern 2: Railway e-tickets ── look for 中国铁路 with company suffix
+  if text.contains("铁路电子客票") || (text.contains("中国铁路") && text.contains("买票请到"))
+  {
+    let re = Regex::new(r"中国铁路(?:[\w（）]+)?(?:股份|集团)?有限公司")?;
+    if let Some(m) = re.find(text) {
+      return Ok(Some(m.as_str().to_string()));
+    }
+    // Fallback to just 中国铁路
+    return Ok(Some("中国铁路".to_string()));
+  }
+
+  // Pattern 3: bare line containing a company keyword (Walmart, Metro, restaurant, e-commerce).
+  for line in text.lines() {
+    let line = line.trim();
+    if line.chars().count() > 255 {
+      continue;
+    }
+    if ["有限公司", "股份公司", "集团公司"]
+      .iter()
+      .any(|kw| line.contains(kw))
+      && buyer.as_deref() != Some(line)
+    {
+      return Ok(Some(line.to_string()));
+    }
+  }
+  Ok(None)
+}
+
+/// Extract product category and name from fapiao text.
+/// Returns (tax_category, product_name) pairs, e.g. ("餐饮服务", "餐饮服务").
+fn extract_products(text: &str) -> Result<Vec<(String, String)>> {
+  // Pattern: *category*description
+  // Category is typically short (2-20 chars), description can be long
+  let re = Regex::new(r"\*([^*\n]{2,20})\*([^*\n]{1,200})")?;
+  let mut products = vec![];
+  for caps in re.captures_iter(text) {
+    let (Some(cat), Some(desc)) = (caps.get(1), caps.get(2)) else {
+      continue;
+    };
+    let (cat, desc) = (cat.as_str().trim(), desc.as_str().trim());
+    if !cat.is_empty() && !desc.is_empty() {
+      products.push((cat.to_string(), desc.to_string()));
+    }
+  }
+  Ok(products)
+}
+
 fn clean(str: &str) -> String {
   str.replace(",", "").trim().to_string()
 }
@@ -432,7 +519,8 @@ struct Fapiao {
   date: Option<Date>,
   amount: Option<String>,
   vat_amount: Option<String>,
-  products: Option<Vec<String>>,
+  seller: Option<String>,
+  products: Option<Vec<(String, String)>>,
   skip: bool,
   skip_reason: Option<String>,
 }
@@ -666,8 +754,8 @@ mod tests {
 
   #[test]
   fn test_s5_metro_format() -> Result<()> {
-    // S5: P\nV\nT\n美国 where T = P + V
-    let result = s5_metro("年\n2024年1月1日\n94.34\n5.66\n100.00\n美国驻武汉总领事馆\n")?;
+    // S5: P\nV\nT + non-numeric line, where T = P + V
+    let result = s5_metro("年\n2024年1月1日\n94.34\n5.66\n100.00\n东西\n")?;
     assert_eq!(result, Some("100.00".to_string()));
     Ok(())
   }
@@ -715,8 +803,8 @@ mod tests {
 
   #[test]
   fn test_v5_metro_vat() -> Result<()> {
-    // V5: P\nV\nT\n美国 (second = VAT)
-    let result = parse("年\n2024年1月1日\n94.34\n5.66\n100.00\n美国驻武汉总领事馆\n")?;
+    // V5: P\nV\nT + non-numeric line (second = VAT)
+    let result = parse("年\n2024年1月1日\n94.34\n5.66\n100.00\n啦啦啦\n")?;
     assert_eq!(result.vat_amount, Some("5.66".to_string()));
     Ok(())
   }
@@ -740,20 +828,89 @@ mod tests {
     assert_eq!(date_str(&result).as_deref(), Some("2024-03-15"));
     assert_eq!(result.amount, Some("188.50".to_string()));
     assert_eq!(result.vat_amount, Some("12.33".to_string()));
-    // NOTE: Python also asserts seller == '沃尔玛(湖北)商业零售有限公司'
-    // — port once Fapiao has a seller field.
+    assert_eq!(
+      result.seller.as_deref(),
+      Some("沃尔玛(湖北)商业零售有限公司")
+    );
     Ok(())
   }
 
   #[test]
   fn test_full_parse_metro_style() -> Result<()> {
     let result = parse(
-      "发票号码：012345678901235\n2024年6月1日\n94.34\n5.66\n100.00\n美国驻武汉总领事馆\n上海麦德龙商贸有限公司武汉分公司\n年\n",
+      "发票号码：012345678901235\n2024年6月1日\n94.34\n5.66\n100.00\n啦啦啦\n上海麦德龙商贸有限公司武汉分公司\n年\n",
     )?;
     assert!(!result.skip);
     assert_eq!(result.amount, Some("100.00".to_string()));
     assert_eq!(result.vat_amount, Some("5.66".to_string()));
-    // NOTE: Python also asserts '麦德龙' in seller.
+    assert!(
+      result
+        .seller
+        .as_deref()
+        .is_some_and(|s| s.contains("麦德龙"))
+    );
+    Ok(())
+  }
+
+  // ── seller / products ────────────────────────────────────────────────────
+
+  #[test]
+  fn test_seller_skips_buyer_names() -> Result<()> {
+    // The buyer is identified via the 购买方 section marker, not a hardcoded list.
+    let result = parse(
+      "年\n2024年1月1日\n购\n买\n方\n信\n息\n名称：LoremIpsum\n销\n售\n方\n信\n息\n名称：沃尔玛(湖北)商业零售有限公司\n（小写）¥50.00",
+    )?;
+    assert_eq!(
+      result.seller.as_deref(),
+      Some("沃尔玛(湖北)商业零售有限公司")
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn test_seller_skips_corporate_buyer() -> Result<()> {
+    // A corporate buyer (with 有限公司 in its name) is still excluded structurally.
+    let result = parse(
+      "年\n2024年1月1日\n购\n买\n方\n信\n息\n名称：某某采购有限公司\n销\n售\n方\n信\n息\n名称：沃尔玛(湖北)商业零售有限公司\n（小写）¥50.00",
+    )?;
+    assert_eq!(
+      result.seller.as_deref(),
+      Some("沃尔玛(湖北)商业零售有限公司")
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn test_seller_didi_label_order() -> Result<()> {
+    // DiDi layout: 销售方 label, 购买方 label, then buyer name, then seller name.
+    let result = parse(
+      "年\n2024年1月1日\n销\n售\n方\n信\n息\n购\n买\n方\n信\n息\n名称：啦啦啦\n统一社会信用代码/纳税人识别号：110105D00000116\n名称：滴滴出行科技有限公司武汉分公司\n（小写）¥50.00",
+    )?;
+    assert_eq!(
+      result.seller.as_deref(),
+      Some("滴滴出行科技有限公司武汉分公司")
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn test_products_extracted() -> Result<()> {
+    let result =
+      parse("年\n2024年1月1日\n（小写）¥50.00\n*餐饮服务*餐饮服务\n*医疗仪器器械*血压计YE660E\n")?;
+    assert_eq!(
+      result.products,
+      Some(vec![
+        ("餐饮服务".to_string(), "餐饮服务".to_string()),
+        ("医疗仪器器械".to_string(), "血压计YE660E".to_string()),
+      ])
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn test_products_empty_when_absent() -> Result<()> {
+    let result = parse("年\n2024年1月1日\n（小写）¥50.00")?;
+    assert_eq!(result.products, Some(vec![]));
     Ok(())
   }
 
@@ -771,7 +928,7 @@ mod tests {
     );
     assert_eq!(date_str(&result).as_deref(), Some("2026-06-22"));
     assert_eq!(result.amount, Some("134.00".to_string()));
-    // NOTE: Python also asserts seller == '中国铁路'.
+    assert_eq!(result.seller.as_deref(), Some("中国铁路"));
     Ok(())
   }
 
