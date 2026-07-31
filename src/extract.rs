@@ -4,19 +4,21 @@ use simple_datetime_rs::Date;
 
 use crate::Result;
 
-const NUM: &'static str = r"[\d,]+\.?\d*";
-const DAXIE: &'static str =
+const NUM: &str = r"[\d,]+\.?\d*";
+const DAXIE: &str =
   r"[壹贰叁肆伍陆柒捌玖拾零百千万亿佰仟][壹贰叁肆伍陆柒捌玖拾零百千万亿佰仟圆元角分整]{2,}[整]?";
 
-pub fn extract(bytes: &[u8]) -> Result<String> {
-  let doc = Document::load_from(bytes)?;
-  let pages = doc.get_pages();
+pub fn extract(bytes_vec: Vec<Vec<u8>>) -> Result<String> {
   let mut fapiaos: Vec<Fapiao> = vec![];
-  for (i, _) in pages {
-    let text = doc.extract_text(&[i])?;
-    fapiaos.push(parse_fapiao(text)?);
+  for bytes in bytes_vec {
+    let doc = Document::load_from(&bytes[..])?;
+    let pages = doc.get_pages();
+    for (i, _) in pages {
+      let text = doc.extract_text(&[i])?;
+      fapiaos.push(parse_fapiao(text)?);
+    }
   }
-  Ok(format!("Received Fapiaos: {:?}", fapiaos))
+  Ok(format!("Received Fapiaos: {:#?}", fapiaos))
 }
 
 fn parse_fapiao(text: String) -> Result<Fapiao> {
@@ -48,19 +50,18 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
   if let Some(caps) = re.captures(&text)
     && let Some(total) = caps.get(1)
     && let Some(current) = caps.get(2)
+    && total.as_str().parse::<i32>()? > current.as_str().parse::<i32>()?
   {
-    if total.as_str().parse::<i32>()? > current.as_str().parse::<i32>()? {
-      return Ok(Fapiao {
-        fapiao_number: None,
-        date: None,
-        amount: None,
-        vat_amount: None,
-        seller: None,
-        products: None,
-        skip: true,
-        skip_reason: Some(format!("page {} of {}", current.as_str(), total.as_str())),
-      });
-    }
+    return Ok(Fapiao {
+      fapiao_number: None,
+      date: None,
+      amount: None,
+      vat_amount: None,
+      seller: None,
+      products: None,
+      skip: true,
+      skip_reason: Some(format!("page {} of {}", current.as_str(), total.as_str())),
+    });
   }
   let mut fapiao = Fapiao {
     fapiao_number: None,
@@ -120,7 +121,7 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
 
   // ── AMOUNT (小写) ──────────────────────────────────────────────────────────
   // Try each strategy in order; first match wins.
-  let strategies: [fn(&str) -> Result<Option<String>>; 7] = [
+  let strategies: [AmountStrategy; 7] = [
     s1_labeled,
     s2_didi,
     s3_daxie_prefix,
@@ -147,7 +148,7 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
 
   // ── VAT AMOUNT ─────────────────────────────────────────────────────────────
   let amt_float = fapiao.amount.as_ref().and_then(|a| a.parse::<f32>().ok());
-  let strategies: [fn(&str, Option<f32>) -> Result<Option<String>>; 6] = [
+  let strategies: [VatStrategy; 6] = [
     v1_inline,
     v2_heji_prefix,
     v3_daxie_suffix,
@@ -179,6 +180,9 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
 
   Ok(fapiao)
 }
+
+type AmountStrategy = fn(&str) -> Result<Option<String>>;
+type VatStrategy = fn(&str, Option<f32>) -> Result<Option<String>>;
 
 // ── amount strategies ────────────────────────────────────────────────────────
 
@@ -262,7 +266,7 @@ fn s6_bare_yen_triplet(text: &str) -> Result<Option<String>> {
   let mut bare_vals = re
     .captures_iter(text)
     .map(|c| c.get(1).map_or_else(|| "", |n| n.as_str()))
-    .map(|c| clean(c))
+    .map(clean)
     .filter_map(|c| c.parse::<f32>().ok())
     .collect::<Vec<f32>>();
 
@@ -509,11 +513,13 @@ fn clean(str: &str) -> String {
 }
 
 fn approx_eq(a: f32, b: f32, tol: Option<f32>) -> bool {
-  let tol_num = tol.unwrap_or_else(|| 0.02);
-  return (a - b).abs() <= tol_num;
+  let tol_num = tol.unwrap_or(0.02);
+  (a - b).abs() <= tol_num
 }
 
+// `skip`/`skip_reason` are consumed by tests and the Debug output.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct Fapiao {
   fapiao_number: Option<String>,
   date: Option<Date>,
@@ -537,7 +543,7 @@ mod tests {
     parse_fapiao(text.to_string())
   }
 
-  // test helpers
+  #[test]
   fn test_clean_strips_commas_and_whitespace() -> Result<()> {
     assert_eq!(clean("1,234.56"), "1234.56".to_string());
     assert_eq!(clean("  99 "), "99".to_string());
@@ -553,7 +559,7 @@ mod tests {
   #[test]
   fn extracts_from_sample_pdf() -> Result<()> {
     let bytes = include_bytes!("../fixtures/combined_fapiaos.pdf");
-    let out = extract(bytes)?;
+    let out = extract(vec![bytes.to_vec()])?;
     println!("{out}");
     Ok(())
   }

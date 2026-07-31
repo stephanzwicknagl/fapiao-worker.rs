@@ -115,7 +115,7 @@
     <!--   </button> -->
     <!---->
     <!-- </form> -->
-    <input type="file" id="file-input" accept=".pdf">
+    <input type="file" id="pdfs-input" accept=".pdf" multiple>
 
     <p id="form-note"><small>Note: the form holds up to 40 entries. Pages that cannot be read are skipped automatically.</small></p>
 
@@ -136,10 +136,12 @@
     import init, {parse_pdf} from "./pkg/fapiao_worker.js"
     await init();
 
-    document.querySelector("#file-input").addEventListener("change", async (e) => {
-      const file = e.target.files[0];
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      console.log(parse_pdf(bytes));
+    document.querySelector("#pdfs-input").addEventListener("change", async (e) => {
+      const files = e.target.files ? Array.from(e.target.files) : [];
+      const allBytes = await Promise.all(
+        files.map(async (file) => new Uint8Array(await file.arrayBuffer()))
+      );
+      console.log(parse_pdf(allBytes));
     });
   </script>
 

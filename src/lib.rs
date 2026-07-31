@@ -12,8 +12,9 @@ pub fn greet(name: &str) -> String {
 }
 
 #[wasm_bindgen]
-pub fn parse_pdf(bytes: &[u8]) -> Result<String, JsError> {
-  let text = extract::extract(bytes)?;
+pub fn parse_pdf(bytes_vec: Vec<js_sys::Uint8Array>) -> Result<String, JsError> {
+  let bytes_vec = bytes_vec.iter().map(|a| a.to_vec()).collect();
+  let text = extract::extract(bytes_vec)?;
   Ok(text)
 }
 
