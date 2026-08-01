@@ -3,12 +3,13 @@ use regex::Regex;
 use simple_datetime_rs::Date;
 
 use crate::Result;
+use crate::model::Fapiao;
 
 const NUM: &str = r"[\d,]+\.?\d*";
 const DAXIE: &str =
   r"[壹贰叁肆伍陆柒捌玖拾零百千万亿佰仟][壹贰叁肆伍陆柒捌玖拾零百千万亿佰仟圆元角分整]{2,}[整]?";
 
-pub fn extract(bytes_vec: Vec<Vec<u8>>) -> Result<String> {
+pub fn extract(bytes_vec: Vec<Vec<u8>>) -> Result<Vec<Fapiao>> {
   let mut fapiaos: Vec<Fapiao> = vec![];
   for bytes in bytes_vec {
     let doc = Document::load_from(&bytes[..])?;
@@ -18,7 +19,7 @@ pub fn extract(bytes_vec: Vec<Vec<u8>>) -> Result<String> {
       fapiaos.push(parse_fapiao(text)?);
     }
   }
-  Ok(format!("Received Fapiaos: {:#?}", fapiaos))
+  Ok(fapiaos)
 }
 
 fn parse_fapiao(text: String) -> Result<Fapiao> {
@@ -517,20 +518,6 @@ fn approx_eq(a: f32, b: f32, tol: Option<f32>) -> bool {
   (a - b).abs() <= tol_num
 }
 
-// `skip`/`skip_reason` are consumed by tests and the Debug output.
-#[derive(Debug)]
-#[allow(dead_code)]
-struct Fapiao {
-  fapiao_number: Option<String>,
-  date: Option<Date>,
-  amount: Option<String>,
-  vat_amount: Option<String>,
-  seller: Option<String>,
-  products: Option<Vec<(String, String)>>,
-  skip: bool,
-  skip_reason: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
   use simple_datetime_rs::Format;
@@ -558,9 +545,9 @@ mod tests {
 
   #[test]
   fn extracts_from_sample_pdf() -> Result<()> {
-    let bytes = include_bytes!("../fixtures/combined_fapiaos.pdf");
+    let bytes = include_bytes!("../fixtures/sample.pdf");
     let out = extract(vec![bytes.to_vec()])?;
-    println!("{out}");
+    println!("{:#?}", out);
     Ok(())
   }
 

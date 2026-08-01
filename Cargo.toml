@@ -14,3 +14,4 @@ getrandom = {version = "0.4.3", features = ["wasm_js"]}
 thiserror = "2.0.18"
 simple-datetime-rs = "0.3.0"
 regex = "1.13.1"
+umya-spreadsheet = "3.0.1"

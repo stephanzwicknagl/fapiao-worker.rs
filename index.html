@@ -72,6 +72,14 @@
     #success-panel { text-align: center; padding: 2rem 0; }
     #success-panel p { margin-bottom: 1.5rem; }
     #success-panel .success-actions { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    #warnings-box {
+      background: var(--color-bg-secondary);
+      border-radius: var(--border-radius);
+      padding: 0.75rem 1rem;
+      margin-top: 1.5rem;
+      font-size: 0.9rem;
+    }
+    #warnings-box ul { margin: 0.5rem 0 0; }
   </style>
   <!-- <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}"> -->
   <!-- <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', -->
@@ -92,34 +100,29 @@
   </header>
 
   <main>
-    <!-- {% if error %} -->
-    <!-- <div class="error-box" role="alert"> -->
-    <!--   <strong>Error:</strong> {{ error }} -->
-    <!-- </div> -->
-    <!-- {% endif %} -->
+    <form id="claim-form">
+      <label for="pdfs-input">Fapiao PDFs</label>
+      <input type="file" id="pdfs-input" accept=".pdf" multiple required>
+      <small>Select one or more PDF files.</small>
 
-    <!-- <form method="POST" action="/process" enctype="multipart/form-data"> -->
-    <!--   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"> -->
-    <!---->
-    <!--   <label for="pdfs">Fapiao PDFs</label> -->
-    <!--   <input type="file" id="pdfs" name="pdfs" accept=".pdf" multiple required> -->
-    <!--   <small>Select one or more PDF files.</small> -->
-    <!---->
-    <!--   <label for="excel">Excel template</label> -->
-    <!--   <input type="file" id="excel" name="excel" accept=".xlsx" required> -->
-    <!--   <small>The VAT Reimbursement Claim Form (.xlsx). The original is never modified.</small> -->
-    <!---->
-    <!--   <button type="submit"> -->
-    <!--     <span class="spinner" aria-hidden="true">⏳ </span> -->
-    <!--     <span class="label">Process and download</span> -->
-    <!--   </button> -->
-    <!---->
-    <!-- </form> -->
-    <input type="file" id="pdfs-input" accept=".pdf" multiple>
+      <label for="xlsx-input">Excel template</label>
+      <input type="file" id="xlsx-input" accept=".xlsx" required>
+      <small>The VAT Reimbursement Claim Form (.xlsx). The original is never modified.</small>
 
-    <p id="form-note"><small>Note: the form holds up to 40 entries. Pages that cannot be read are skipped automatically.</small></p>
+      <button type="submit">
+        <span class="spinner" aria-hidden="true">⏳ </span>
+        <span class="label">Process and download</span>
+      </button>
 
-    <p id="result"></p>
+      <p id="form-note"><small>Note: the form holds up to 40 entries. Pages that cannot be read are skipped automatically.</small></p>
+    </form>
+
+    <div class="error-box" id="error-box" role="alert" hidden></div>
+
+    <div id="warnings-box" hidden>
+      <strong>Some pages were skipped:</strong>
+      <ul id="warnings-list"></ul>
+    </div>
   </main>
 
   <div class="overlay" id="processing-overlay">
@@ -133,15 +136,66 @@
   <footer>Fapiao Worker — files never leave your computer. All processing is done locally.</footer>
 
   <script type="module">
-    import init, {parse_pdf} from "./pkg/fapiao_worker.js"
+    import init, { fill_claim_form } from "./pkg/fapiao_worker.js";
     await init();
 
-    document.querySelector("#pdfs-input").addEventListener("change", async (e) => {
-      const files = e.target.files ? Array.from(e.target.files) : [];
-      const allBytes = await Promise.all(
-        files.map(async (file) => new Uint8Array(await file.arrayBuffer()))
-      );
-      console.log(parse_pdf(allBytes));
+    const form = document.querySelector("#claim-form");
+    const overlay = document.querySelector("#processing-overlay");
+    const errorBox = document.querySelector("#error-box");
+    const warningsBox = document.querySelector("#warnings-box");
+    const warningsList = document.querySelector("#warnings-list");
+
+    function renderWarnings(warnings) {
+      warningsList.replaceChildren();
+      if (!warnings.length) {
+        warningsBox.hidden = true;
+        return;
+      }
+      for (const w of warnings) {
+        const li = document.createElement("li");
+        li.textContent = w;
+        warningsList.appendChild(li);
+      }
+      warningsBox.hidden = false;
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorBox.hidden = true;
+      warningsBox.hidden = true;
+
+      const pdfFiles = Array.from(document.querySelector("#pdfs-input").files);
+      const xlsxFile = document.querySelector("#xlsx-input").files[0];
+      if (!pdfFiles.length || !xlsxFile) return;
+
+      form.classList.add("loading");
+      overlay.classList.add("active");
+      try {
+        const pdfBytes = await Promise.all(
+          pdfFiles.map(async (f) => new Uint8Array(await f.arrayBuffer()))
+        );
+        const xlsxBytes = new Uint8Array(await xlsxFile.arrayBuffer());
+
+        const { bytes, warnings } = fill_claim_form(pdfBytes, xlsxBytes);
+
+        const blob = new Blob([bytes], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = xlsxFile.name.replace(/\.xlsx$/i, "") + "-filled.xlsx";
+        a.click();
+        URL.revokeObjectURL(url);
+
+        renderWarnings(warnings);
+      } catch (err) {
+        errorBox.textContent = `Error: ${err.message ?? err}`;
+        errorBox.hidden = false;
+      } finally {
+        form.classList.remove("loading");
+        overlay.classList.remove("active");
+      }
     });
   </script>
 
