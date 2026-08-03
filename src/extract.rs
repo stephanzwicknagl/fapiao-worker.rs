@@ -141,14 +141,12 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
     amount = s7_railway(&text)?;
   }
   if let Some(a) = amount {
-    let amount_float = a.parse::<f32>()?;
-    if amount_float > 0_f32 && amount_float <= 1000000_f32 {
-      fapiao.amount = Some(a);
+    if a > 0_f32 && a <= 1000000_f32 {
+      fapiao.amount = Some(rounded_for_cents(a));
     }
   }
 
   // ── VAT AMOUNT ─────────────────────────────────────────────────────────────
-  let amt_float = fapiao.amount.as_ref().and_then(|a| a.parse::<f32>().ok());
   let strategies: [VatStrategy; 6] = [
     v1_inline,
     v2_heji_prefix,
@@ -160,16 +158,15 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
   let mut vat_amount = None;
   for strategy in strategies {
     if vat_amount.is_none() {
-      vat_amount = strategy(&text, amt_float)?;
+      vat_amount = strategy(&text, fapiao.amount)?;
     }
   }
   if vat_amount.is_none() && is_railway_ticket {
-    vat_amount = v7_railway(&fapiao.amount)?;
+    vat_amount = v7_railway(fapiao.amount)?;
   }
   if let Some(a) = vat_amount {
-    let vat_amount_float = a.parse::<f32>()?;
-    if vat_amount_float > 0_f32 && vat_amount_float <= 1000000_f32 {
-      fapiao.vat_amount = Some(a);
+    if a > 0_f32 && a <= 1000000_f32 {
+      fapiao.vat_amount = Some(rounded_for_cents(a));
     }
   }
 
@@ -182,16 +179,16 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
   Ok(fapiao)
 }
 
-type AmountStrategy = fn(&str) -> Result<Option<String>>;
-type VatStrategy = fn(&str, Option<f32>) -> Result<Option<String>>;
+type AmountStrategy = fn(&str) -> Result<Option<f32>>;
+type VatStrategy = fn(&str, Option<f32>) -> Result<Option<f32>>;
 
 // ── amount strategies ────────────────────────────────────────────────────────
 
 /// Extract group 1 of the first regex match, cleaned of commas/whitespace.
-fn capture_amount(re: &Regex, text: &str) -> Option<String> {
+fn capture_amount(re: &Regex, text: &str) -> Option<f32> {
   re.captures(text)
     .and_then(|caps| caps.get(1))
-    .map(|m| clean(m.as_str()))
+    .and_then(|m| clean(m.as_str()).parse::<f32>().ok())
 }
 
 /// Check the T = P + V invariant for a triplet of capture-group matches.
@@ -199,43 +196,47 @@ fn total_matches(
   t: Option<regex::Match>,
   p: Option<regex::Match>,
   v: Option<regex::Match>,
-) -> Result<Option<String>> {
+) -> Result<Option<f32>> {
   if let (Some(t), Some(p), Some(v)) = (t, p, v) {
     let p: f32 = p.as_str().parse()?;
     let v: f32 = v.as_str().parse()?;
     if approx_eq(t.as_str().parse()?, p + v, None) {
-      return Ok(Some(clean(t.as_str())));
+      return Ok(clean(t.as_str()).parse().ok());
     }
   }
   Ok(None)
 }
 
+fn rounded_for_cents(x: f32) -> f32 {
+  (x * 100_f32).round() / 100_f32
+}
+
 /// S1: Labeled  （小写）¥xxx  ── Walmart, hotels
-fn s1_labeled(text: &str) -> Result<Option<String>> {
+fn s1_labeled(text: &str) -> Result<Option<f32>> {
   let re = Regex::new(&format!(r"[（(]小写[）)]\s*[¥￥]\s*({})", NUM))?;
   Ok(capture_amount(&re, text))
 }
 
 /// S2: DiDi/transport  （小写）\nxxx\n¥
-fn s2_didi(text: &str) -> Result<Option<String>> {
+fn s2_didi(text: &str) -> Result<Option<f32>> {
   let re = Regex::new(&format!(r"[（(]小写[）)]\s*\n\s*({})\s*\n\s*[¥￥]", NUM))?;
   Ok(capture_amount(&re, text))
 }
 
 /// S3: Amount precedes 大写  ── Meituan multi-page last page: ¥xxx\n大写
-fn s3_daxie_prefix(text: &str) -> Result<Option<String>> {
+fn s3_daxie_prefix(text: &str) -> Result<Option<f32>> {
   let re = Regex::new(&format!(r"[¥￥]({})\n{}", NUM, DAXIE))?;
   Ok(capture_amount(&re, text))
 }
 
 /// S4: Amount follows 大写  ── e-commerce, travel: 大写\n¥xxx
-fn s4_daxie_suffix(text: &str) -> Result<Option<String>> {
+fn s4_daxie_suffix(text: &str) -> Result<Option<f32>> {
   let re = Regex::new(&format!(r"{}\n[¥￥]({})", DAXIE, NUM))?;
   Ok(capture_amount(&re, text))
 }
 
 /// S4b: Restaurant format: 大写\nT\nP\nV where T = P + V.
-fn s4b_restaurant(text: &str) -> Result<Option<String>> {
+fn s4b_restaurant(text: &str) -> Result<Option<f32>> {
   let re = Regex::new(&format!(
     r"{}\n[¥￥]*({})\n[¥￥]*({})\n[¥￥]*({})",
     DAXIE, NUM, NUM, NUM
@@ -248,7 +249,7 @@ fn s4b_restaurant(text: &str) -> Result<Option<String>> {
 
 /// S5: Metro/Makro format  ── three bare numbers (P, V, T with T = P + V)
 /// followed by a non-numeric line (the buyer/seller name block).
-fn s5_metro(text: &str) -> Result<Option<String>> {
+fn s5_metro(text: &str) -> Result<Option<f32>> {
   let re = Regex::new(&format!(
     r"({})[ \t]*\n[ \t]*({})[ \t]*\n[ \t]*({})[ \t]*\n[ \t]*[^\d\n]",
     NUM, NUM, NUM
@@ -262,7 +263,7 @@ fn s5_metro(text: &str) -> Result<Option<String>> {
 }
 
 /// S6: Bare-¥ triplet  ── Domino's format: T\n¥  P\n¥  V\n¥ (scattered)
-fn s6_bare_yen_triplet(text: &str) -> Result<Option<String>> {
+fn s6_bare_yen_triplet(text: &str) -> Result<Option<f32>> {
   let re = Regex::new(&format!(r"({})\n[¥￥]", NUM))?;
   let mut bare_vals = re
     .captures_iter(text)
@@ -274,10 +275,7 @@ fn s6_bare_yen_triplet(text: &str) -> Result<Option<String>> {
   if bare_vals.len() < 3 {
     return Ok(None);
   }
-  let mut bare_set: Vec<f32> = bare_vals
-    .iter()
-    .map(|x| (x * 100_f32).round() / 100_f32)
-    .collect();
+  let mut bare_set: Vec<f32> = bare_vals.iter().map(|x| rounded_for_cents(*x)).collect();
   bare_set.sort_unstable_by(f32::total_cmp);
   bare_set.dedup();
 
@@ -289,9 +287,9 @@ fn s6_bare_yen_triplet(text: &str) -> Result<Option<String>> {
       if a == c {
         continue;
       }
-      let b = ((c - a) * 100_f32).round() / 100_f32;
+      let b = rounded_for_cents(c - a);
       if b > 0_f32 && bare_set.contains(&b) && !approx_eq(b, *c, None) {
-        return Ok(Some(format!("{:.2}", c)));
+        return Ok(Some(*c));
       }
     }
   }
@@ -299,7 +297,7 @@ fn s6_bare_yen_triplet(text: &str) -> Result<Option<String>> {
 }
 
 /// S7: Railway e-tickets ── 票价 followed by ¥xxx (may be on next line)
-fn s7_railway(text: &str) -> Result<Option<String>> {
+fn s7_railway(text: &str) -> Result<Option<f32>> {
   // Pattern 1: Same line - 票价:¥xxx or 票价：¥xxx
   let re = Regex::new(&format!(r"票价[：:]\s*[¥￥]\s*({})", NUM))?;
   if let Some(amount) = capture_amount(&re, text) {
@@ -312,31 +310,31 @@ fn s7_railway(text: &str) -> Result<Option<String>> {
 
 // ── vat amount strategies ────────────────────────────────────────────────────────
 /// V1: Labeled  （小写）¥xxx  ── Walmart, hotels
-fn v1_inline(text: &str, _amt: Option<f32>) -> Result<Option<String>> {
+fn v1_inline(text: &str, _amt: Option<f32>) -> Result<Option<f32>> {
   let re = Regex::new(&format!(r"合\s+计\s+[¥￥]{}\s+[¥￥]({})", NUM, NUM))?;
   Ok(capture_amount(&re, text))
 }
 
 // V2: DiDi format  ── 合\n计\nP\n¥\nV\n¥
-fn v2_heji_prefix(text: &str, _amt: Option<f32>) -> Result<Option<String>> {
+fn v2_heji_prefix(text: &str, _amt: Option<f32>) -> Result<Option<f32>> {
   let re = Regex::new(&format!(r"合\n计\n{}\n[¥￥]\n({})\n[¥￥]", NUM, NUM))?;
   Ok(capture_amount(&re, text))
 }
 
 // V3: E-commerce  ── ¥P\n¥V\n大写  (skip if captured value == total)
-fn v3_daxie_suffix(text: &str, amt: Option<f32>) -> Result<Option<String>> {
+fn v3_daxie_suffix(text: &str, amt: Option<f32>) -> Result<Option<f32>> {
   let re = Regex::new(&format!(r"[¥￥]{}\n[¥￥]({})\n{}", NUM, NUM, DAXIE))?;
   let Some(candidate) = capture_amount(&re, text) else {
     return Ok(None);
   };
   match amt {
-    Some(a) if approx_eq(candidate.parse()?, a, None) => Ok(None),
+    Some(a) if approx_eq(candidate, a, None) => Ok(None),
     _ => Ok(Some(candidate)),
   }
 }
 
 // V4: Restaurant format  ── 大写\nT\nP\nV (third number = VAT)
-fn v4_daxie_suffix(text: &str, _amt: Option<f32>) -> Result<Option<String>> {
+fn v4_daxie_suffix(text: &str, _amt: Option<f32>) -> Result<Option<f32>> {
   let re = Regex::new(&format!(
     r"{}\n[¥￥]*({})\n[¥￥]*({})\n[¥￥]*({})",
     DAXIE, NUM, NUM, NUM
@@ -345,27 +343,27 @@ fn v4_daxie_suffix(text: &str, _amt: Option<f32>) -> Result<Option<String>> {
     return Ok(None);
   };
   if total_matches(caps.get(1), caps.get(2), caps.get(3))?.is_some() {
-    return Ok(caps.get(3).map(|v| clean(v.as_str())));
+    return Ok(caps.get(3).and_then(|v| clean(v.as_str()).parse().ok()));
   }
   Ok(None)
 }
 
 // V5: Metro/Makro format  ── P\nV\nT + non-numeric line (second number = VAT)
-fn v5_bare_yen_triplet(text: &str, _amt: Option<f32>) -> Result<Option<String>> {
+fn v5_bare_yen_triplet(text: &str, _amt: Option<f32>) -> Result<Option<f32>> {
   let re = Regex::new(&format!(
     r"({})[ \t]*\n[ \t]*({})[ \t]*\n[ \t]*({})[ \t]*\n[ \t]*[^\d\n]",
     NUM, NUM, NUM
   ))?;
   for caps in re.captures_iter(text) {
     if total_matches(caps.get(3), caps.get(1), caps.get(2))?.is_some() {
-      return Ok(caps.get(2).map(|v| clean(v.as_str())));
+      return Ok(caps.get(2).and_then(|v| clean(v.as_str()).parse().ok()));
     }
   }
   Ok(None)
 }
 
 // V6: Fallback  ── find ¥ or bare-¥ value that pairs with another to equal total
-fn v6_bare_yen_fallback(text: &str, amt: Option<f32>) -> Result<Option<String>> {
+fn v6_bare_yen_fallback(text: &str, amt: Option<f32>) -> Result<Option<f32>> {
   let Some(amt_float) = amt else {
     return Ok(None);
   };
@@ -381,10 +379,7 @@ fn v6_bare_yen_fallback(text: &str, amt: Option<f32>) -> Result<Option<String>> 
   let mut all_vals: Vec<f32> = parse_vals(&re_yen);
   all_vals.extend(parse_vals(&re_bare));
 
-  let mut val_set: Vec<f32> = all_vals
-    .iter()
-    .map(|x| (x * 100_f32).round() / 100_f32)
-    .collect();
+  let mut val_set: Vec<f32> = all_vals.iter().map(|x| rounded_for_cents(*x)).collect();
   val_set.sort_unstable_by(f32::total_cmp);
   val_set.dedup();
 
@@ -392,18 +387,17 @@ fn v6_bare_yen_fallback(text: &str, amt: Option<f32>) -> Result<Option<String>> 
     if approx_eq(*a, amt_float, None) {
       continue;
     }
-    let b = ((amt_float - a) * 100_f32).round() / 100_f32;
+    let b = rounded_for_cents(amt_float - a);
     if b > 0_f32 && val_set.contains(&b) && !approx_eq(b, amt_float, None) {
-      return Ok(Some(format!("{:.2}", a.min(b))));
+      return Ok(Some(a.min(b)));
     }
   }
   Ok(None)
 }
 
-fn v7_railway(amount: &Option<String>) -> Result<Option<String>> {
-  if let Some(a) = amount {
-    let amount_float: f32 = a.parse()?;
-    return Ok(Some(format!("{:.2}", amount_float * 3.0 / 103_f32)));
+fn v7_railway(amount: Option<f32>) -> Result<Option<f32>> {
+  if let Some(amount) = amount {
+    return Ok(Some(amount * 3.0 / 103_f32));
   }
   Ok(None)
 }
@@ -695,21 +689,21 @@ mod tests {
     // S1: （小写）¥xxx
     let result =
       s1_labeled("年\n2024年1月1日\n（小写）¥188.50\n名称：沃尔玛（湖北）商业零售有限公司")?;
-    assert_eq!(result, Some("188.50".to_string()));
+    assert_eq!(result, Some(188.50));
     Ok(())
   }
 
   #[test]
   fn test_s1_fullwidth_yen() -> Result<()> {
     let result = s1_labeled("年\n2024年1月1日\n（小写）￥99.00")?;
-    assert_eq!(result, Some("99.00".to_string()));
+    assert_eq!(result, Some(99.00));
     Ok(())
   }
 
   #[test]
   fn test_s1_comma_in_amount() -> Result<()> {
     let result = s1_labeled("年\n2024年1月1日\n（小写）¥1,234.56")?;
-    assert_eq!(result, Some("1234.56".to_string()));
+    assert_eq!(result, Some(1234.56));
     Ok(())
   }
 
@@ -717,7 +711,7 @@ mod tests {
   fn test_s2_didi_style() -> Result<()> {
     // S2: （小写）\nxxx\n¥
     let result = s2_didi("年\n2024年1月1日\n（小写）\n45.60\n¥")?;
-    assert_eq!(result, Some("45.60".to_string()));
+    assert_eq!(result, Some(45.60));
     Ok(())
   }
 
@@ -725,7 +719,7 @@ mod tests {
   fn test_s3_meituan_prefix() -> Result<()> {
     // S3: ¥xxx\n大写 — amount precedes 大写
     let result = s3_daxie_prefix("年\n2024年1月1日\n¥55.00\n壹拾贰圆整")?;
-    assert_eq!(result, Some("55.00".to_string()));
+    assert_eq!(result, Some(55.00));
     Ok(())
   }
 
@@ -733,7 +727,7 @@ mod tests {
   fn test_s4_ecommerce_amount_follows_daxie() -> Result<()> {
     // S4: 大写\n¥xxx
     let result = s4_daxie_suffix("年\n2024年1月1日\n壹佰贰拾叁圆整\n¥123.00")?;
-    assert_eq!(result, Some("123.00".to_string()));
+    assert_eq!(result, Some(123.00));
     Ok(())
   }
 
@@ -741,7 +735,7 @@ mod tests {
   fn test_s4b_restaurant_t_p_v_triplet() -> Result<()> {
     // S4b: 大写\nT\nP\nV where T = P + V
     let result = s4b_restaurant("年\n2024年1月1日\n壹佰圆整\n100.00\n94.34\n5.66\n")?;
-    assert_eq!(result, Some("100.00".to_string()));
+    assert_eq!(result, Some(100.00));
     Ok(())
   }
 
@@ -749,7 +743,7 @@ mod tests {
   fn test_s5_metro_format() -> Result<()> {
     // S5: P\nV\nT + non-numeric line, where T = P + V
     let result = s5_metro("年\n2024年1月1日\n94.34\n5.66\n100.00\n东西\n")?;
-    assert_eq!(result, Some("100.00".to_string()));
+    assert_eq!(result, Some(100.00));
     Ok(())
   }
 
@@ -757,7 +751,7 @@ mod tests {
   fn test_s6_dominos_bare_yen_triplet() -> Result<()> {
     // S6: T\n¥  P\n¥  V\n¥ scattered in text
     let result = parse("年\n2024年1月1日\n100.00\n¥\n94.34\n¥\n5.66\n¥\n")?;
-    assert_eq!(result.amount, Some("100.00".to_string()));
+    assert_eq!(result.amount, Some(100.00));
     Ok(())
   }
 
@@ -774,7 +768,7 @@ mod tests {
   fn test_v1_walmart_he_ji() -> Result<()> {
     // V1: 合   计 ¥P ¥V
     let result = parse("年\n2024年1月1日\n（小写）¥188.50\n合     计  ¥176.17  ¥12.33")?;
-    assert_eq!(result.vat_amount, Some("12.33".to_string()));
+    assert_eq!(result.vat_amount, Some(12.33));
     Ok(())
   }
 
@@ -782,7 +776,7 @@ mod tests {
   fn test_v2_didi_he_ji() -> Result<()> {
     // V2: 合\n计\nP\n¥\nV\n¥
     let result = parse("年\n2024年1月1日\n（小写）\n45.60\n¥\n合\n计\n42.62\n¥\n2.98\n¥")?;
-    assert_eq!(result.vat_amount, Some("2.98".to_string()));
+    assert_eq!(result.vat_amount, Some(2.98));
     Ok(())
   }
 
@@ -790,7 +784,7 @@ mod tests {
   fn test_v4_restaurant_vat() -> Result<()> {
     // V4: 大写\nT\nP\nV (third = VAT)
     let result = parse("年\n2024年1月1日\n壹佰圆整\n100.00\n94.34\n5.66\n")?;
-    assert_eq!(result.vat_amount, Some("5.66".to_string()));
+    assert_eq!(result.vat_amount, Some(5.66));
     Ok(())
   }
 
@@ -798,7 +792,7 @@ mod tests {
   fn test_v5_metro_vat() -> Result<()> {
     // V5: P\nV\nT + non-numeric line (second = VAT)
     let result = parse("年\n2024年1月1日\n94.34\n5.66\n100.00\n啦啦啦\n")?;
-    assert_eq!(result.vat_amount, Some("5.66".to_string()));
+    assert_eq!(result.vat_amount, Some(5.66));
     Ok(())
   }
 
@@ -819,8 +813,8 @@ mod tests {
     assert!(!result.skip);
     assert_eq!(result.fapiao_number.as_deref(), Some("012345678901234"));
     assert_eq!(date_str(&result).as_deref(), Some("2024-03-15"));
-    assert_eq!(result.amount, Some("188.50".to_string()));
-    assert_eq!(result.vat_amount, Some("12.33".to_string()));
+    assert_eq!(result.amount, Some(188.50));
+    assert_eq!(result.vat_amount, Some(12.33));
     assert_eq!(
       result.seller.as_deref(),
       Some("沃尔玛(湖北)商业零售有限公司")
@@ -834,8 +828,8 @@ mod tests {
       "发票号码：012345678901235\n2024年6月1日\n94.34\n5.66\n100.00\n啦啦啦\n上海麦德龙商贸有限公司武汉分公司\n年\n",
     )?;
     assert!(!result.skip);
-    assert_eq!(result.amount, Some("100.00".to_string()));
-    assert_eq!(result.vat_amount, Some("5.66".to_string()));
+    assert_eq!(result.amount, Some(100.00));
+    assert_eq!(result.vat_amount, Some(5.66));
     assert!(
       result
         .seller
@@ -920,7 +914,7 @@ mod tests {
       Some("26449124088000208438")
     );
     assert_eq!(date_str(&result).as_deref(), Some("2026-06-22"));
-    assert_eq!(result.amount, Some("134.00".to_string()));
+    assert_eq!(result.amount, Some(134.00));
     assert_eq!(result.seller.as_deref(), Some("中国铁路"));
     Ok(())
   }
@@ -932,7 +926,7 @@ mod tests {
       "发票号码：12345678901234567890\n2026年06月22日\n电子发票（铁路电子客票）\n票价：¥103.00\n买票请到12306\n中国铁路祝您旅途愉快\n",
     )?;
     assert!(!result.skip);
-    assert_eq!(result.vat_amount, Some("3.00".to_string()));
+    assert_eq!(result.vat_amount, Some(3.00));
     Ok(())
   }
 
@@ -942,7 +936,7 @@ mod tests {
     let result = parse(
       "2026年06月22日\n电子发票（铁路电子客票）\n票价：¥134.00\n买票请到12306\n中国铁路祝您旅途愉快\n",
     )?;
-    assert_eq!(result.vat_amount, Some("3.90".to_string()));
+    assert_eq!(result.vat_amount, Some(3.90));
     Ok(())
   }
 
@@ -953,7 +947,7 @@ mod tests {
       "发票号码：012345678901234\n2024年3月15日\n（小写）¥188.50\n合     计  ¥176.17  ¥12.33\n名称：沃尔玛（湖北）商业零售有限公司\n年\n",
     )?;
     assert!(!result.skip);
-    assert_eq!(result.vat_amount, Some("12.33".to_string()));
+    assert_eq!(result.vat_amount, Some(12.33));
     Ok(())
   }
 }

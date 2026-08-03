@@ -52,7 +52,7 @@ pub fn fill_claim_form(
     .filter_map(|f| f.skip_reason.clone())
     .collect();
 
-  let out = fill::place_fapiaos_in_xlsx(fapiaos, xlsx_bytes.to_vec())?;
+  let out = fill::insert_fapiao_info_in_xlsx(xlsx_bytes.to_vec(), fapiaos)?;
   Ok(FillResult {
     bytes: js_sys::Uint8Array::from(out.as_slice()),
     warnings,
@@ -81,6 +81,9 @@ enum Error {
 
   #[error(transparent)]
   ParseFloatError(#[from] std::num::ParseFloatError),
+
+  #[error(transparent)]
+  XlsxError(#[from] umya_spreadsheet::XlsxError),
 }
 
 #[cfg(test)]
