@@ -2,6 +2,9 @@ mod extract;
 mod fill;
 mod model;
 
+#[cfg(test)]
+mod fixtures;
+
 use std::io;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;

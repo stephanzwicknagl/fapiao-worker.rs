@@ -19,7 +19,18 @@ pub fn extract(bytes_vec: Vec<Vec<u8>>) -> Result<Vec<Fapiao>> {
       fapiaos.push(parse_fapiao(text)?);
     }
   }
+  sort_fapiaos(&mut fapiaos);
   Ok(fapiaos)
+}
+
+fn sort_fapiaos(fapiaos: &mut Vec<Fapiao>) {
+  fapiaos.sort_unstable_by(|f1, f2| {
+    f1.date.cmp(&f2.date).then_with(|| {
+      f2.amount
+        .partial_cmp(&f1.amount)
+        .unwrap_or_else(|| core::cmp::Ordering::Less)
+    })
+  });
 }
 
 fn parse_fapiao(text: String) -> Result<Fapiao> {
@@ -517,6 +528,7 @@ mod tests {
   use simple_datetime_rs::Format;
 
   use super::*;
+  use crate::fixtures::{full_fapiao, many};
 
   // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -948,6 +960,83 @@ mod tests {
     )?;
     assert!(!result.skip);
     assert_eq!(result.vat_amount, Some(12.33));
+    Ok(())
+  }
+
+  #[test]
+  fn test_fapiaos_sorted_by_date() -> Result<()> {
+    let mut fapiaos = vec![
+      Fapiao {
+        date: Some(Date::new(2024, 3, 15)),
+        ..full_fapiao(0)
+      },
+      Fapiao {
+        date: Some(Date::new(2024, 3, 15)),
+        ..full_fapiao(0)
+      },
+      Fapiao {
+        date: Some(Date::new(2024, 1, 10)),
+        ..full_fapiao(1)
+      },
+      Fapiao {
+        date: Some(Date::new(2024, 5, 1)),
+        ..full_fapiao(2)
+      },
+    ];
+    sort_fapiaos(&mut fapiaos);
+    assert!(fapiaos.windows(2).all(|w| w[0].date <= w[1].date));
+    assert_eq!(
+      fapiaos.iter().map(|f| f.date).collect::<Vec<_>>(),
+      vec![
+        Some(Date::new(2024, 1, 10)),
+        Some(Date::new(2024, 3, 15)),
+        Some(Date::new(2024, 3, 15)),
+        Some(Date::new(2024, 5, 1)),
+      ]
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn test_fapiaos_sorted_secondary_by_amount() -> Result<()> {
+    let mut fapiaos = vec![
+      Fapiao {
+        date: Some(Date::new(2024, 3, 15)),
+        amount: Some(10.00),
+        ..full_fapiao(0)
+      },
+      Fapiao {
+        date: Some(Date::new(2024, 3, 15)),
+        amount: Some(20.00),
+        ..full_fapiao(0)
+      },
+    ];
+    sort_fapiaos(&mut fapiaos);
+    assert_eq!(
+      fapiaos.iter().map(|f| f.amount).collect::<Vec<_>>(),
+      vec![Some(20.00), Some(10.00)]
+    );
+    Ok(())
+  }
+
+  #[test]
+  fn test_fapiaos_sorted_with_none_dates() -> Result<()> {
+    let mut fapiaos = vec![
+      Fapiao {
+        date: Some(Date::new(2024, 3, 15)),
+        ..full_fapiao(0)
+      },
+      Fapiao {
+        date: None,
+        ..full_fapiao(1)
+      },
+      Fapiao {
+        date: Some(Date::new(2024, 1, 10)),
+        ..full_fapiao(2)
+      },
+    ];
+    sort_fapiaos(&mut fapiaos);
+    assert!(fapiaos.windows(2).all(|w| w[0].date <= w[1].date));
     Ok(())
   }
 }

@@ -1,5 +1,5 @@
 use simple_datetime_rs::Date;
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Fapiao {
   pub fapiao_number: Option<String>,

@@ -17,10 +17,18 @@ pub fn insert_fapiao_info_in_xlsx(excel_bytes: Vec<u8>, fapiaos: Vec<Fapiao>) ->
 fn edit_xlsx(mut book: Workbook, fapiaos: Vec<Fapiao>) -> Result<Workbook> {
   let sheet = book.active_sheet_mut();
   for (i, fapiao) in fapiaos.iter().filter(|f| !f.skip).enumerate() {
-    if let Some(number) = &fapiao.fapiao_number {
+    if let Some(d) = &fapiao.date
+      && let Some(n) = &fapiao.fapiao_number
+      && let Some(a) = &fapiao.amount
+      && let Some(vat_a) = &fapiao.vat_amount
+    {
       sheet
-        .cell_mut(format!("C{}", i + 12))
-        .set_value_string(number);
+        .cell_mut((2, i as u32 + 12))
+        .set_value_string(d.to_string());
+      sheet.cell_mut((3, i as u32 + 12)).set_value_string(n);
+      sheet.cell_mut((7, i as u32 + 12)).set_value("1");
+      sheet.cell_mut((8, i as u32 + 12)).set_value_number(*a);
+      sheet.cell_mut((9, i as u32 + 12)).set_value_number(*vat_a);
     }
   }
   Ok(book)
@@ -28,18 +36,118 @@ fn edit_xlsx(mut book: Workbook, fapiaos: Vec<Fapiao>) -> Result<Workbook> {
 
 #[cfg(test)]
 mod tests {
-  use simple_datetime_rs::Format;
+  use umya_spreadsheet::CellRawValue;
 
   use super::*;
-  use crate::extract::extract;
+  use crate::fixtures;
 
   #[test]
-  fn writes_to_sample_xlsx() -> Result<()> {
+  fn errors_on_invalid_xlsx_bytes() {
+    let fake_bytes = b"not an xlsx".to_vec();
+    let fapiaos = fixtures::many(1);
+    let result = insert_fapiao_info_in_xlsx(fake_bytes, fapiaos);
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn writes_fapiao_number() -> Result<()> {
     let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
-    let bytes_pdf = include_bytes!("../fixtures/sample.pdf");
-    let fapiaos = extract(vec![bytes_pdf.to_vec()])?;
-    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos)?;
-    println!("{:#?}", out);
+    let fapiaos = fixtures::many(3);
+    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos.clone())?;
+    let book = read_reader(Cursor::new(out), true)?;
+    let sheet = book.active_sheet();
+    for (i, f) in fapiaos.iter().enumerate() {
+      assert_eq!(sheet.cell_value((3, i as u32 + 12)).data_type(), "s");
+      assert_eq!(
+        sheet.cell_value((3, i as u32 + 12)).raw_value(),
+        &CellRawValue::String(f.fapiao_number.as_ref().unwrap().clone().into())
+      );
+    }
+    Ok(())
+  }
+
+  #[test]
+  fn writes_fapiao_date() -> Result<()> {
+    let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
+    let fapiaos = fixtures::many(3);
+    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos.clone())?;
+    let book = read_reader(Cursor::new(out), true)?;
+    let sheet = book.active_sheet();
+    for (i, f) in fapiaos.iter().enumerate() {
+      assert_eq!(sheet.cell_value((2, i as u32 + 12)).data_type(), "s");
+      assert_eq!(
+        sheet.cell_value((2, i as u32 + 12)).raw_value(),
+        &CellRawValue::String(f.date.as_ref().unwrap().clone().to_string().into())
+      );
+    }
+    Ok(())
+  }
+
+  #[test]
+  fn writes_quantity() -> Result<()> {
+    let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
+    let fapiaos = fixtures::many(3);
+    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos.clone())?;
+    let book = read_reader(Cursor::new(out), true)?;
+    let sheet = book.active_sheet();
+    for (i, f) in fapiaos.iter().enumerate() {
+      assert_eq!(sheet.cell_value((7, i as u32 + 12)).data_type(), "n");
+      assert_eq!(
+        sheet.cell_value((7, i as u32 + 12)).raw_value(),
+        &CellRawValue::Numeric(1 as f64)
+      );
+    }
+    Ok(())
+  }
+
+  #[test]
+  fn writes_amount() -> Result<()> {
+    let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
+    let fapiaos = fixtures::many(3);
+    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos.clone())?;
+    let book = read_reader(Cursor::new(out), true)?;
+    let sheet = book.active_sheet();
+    for (i, f) in fapiaos.iter().enumerate() {
+      assert_eq!(sheet.cell_value((8, i as u32 + 12)).data_type(), "n");
+      assert_eq!(
+        sheet.cell_value((8, i as u32 + 12)).raw_value(),
+        &CellRawValue::Numeric(f.amount.unwrap().into())
+      );
+    }
+    Ok(())
+  }
+
+  #[test]
+  fn writes_vat_amount() -> Result<()> {
+    let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
+    let fapiaos = fixtures::many(3);
+    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos.clone())?;
+    let book = read_reader(Cursor::new(out), true)?;
+    let sheet = book.active_sheet();
+    for (i, f) in fapiaos.iter().enumerate() {
+      assert_eq!(sheet.cell_value((9, i as u32 + 12)).data_type(), "n");
+      assert_eq!(
+        sheet.cell_value((9, i as u32 + 12)).raw_value(),
+        &CellRawValue::Numeric(f.vat_amount.unwrap().into())
+      );
+    }
+    Ok(())
+  }
+
+  #[test]
+  fn leaves_remarks_empty() -> Result<()> {
+    let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
+    let fapiaos = fixtures::many(3);
+    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos.clone())?;
+    let book = read_reader(Cursor::new(out), true)?;
+    let sheet = book.active_sheet();
+    for (i, _) in fapiaos.iter().enumerate() {
+      assert_eq!(sheet.cell_value((10, i as u32 + 12)).data_type(), "");
+      assert_eq!(
+        sheet.cell_value((10, i as u32 + 12)).raw_value(),
+        &CellRawValue::Empty
+      );
+    }
     Ok(())
   }
 }
