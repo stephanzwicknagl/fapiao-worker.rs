@@ -4,6 +4,7 @@ use crate::Result;
 use crate::model::Fapiao;
 
 use umya_spreadsheet::Workbook;
+use umya_spreadsheet::helper::date::{convert_date, excel_to_date_time_jiff};
 use umya_spreadsheet::reader::xlsx::read_reader;
 use umya_spreadsheet::writer::xlsx::write_writer;
 
@@ -24,7 +25,14 @@ fn edit_xlsx(mut book: Workbook, fapiaos: Vec<Fapiao>) -> Result<Workbook> {
     {
       sheet
         .cell_mut((2, i as u32 + 12))
-        .set_value_string(d.to_string());
+        .set_value_number(convert_date(
+          d.year as i32,
+          d.month as i32,
+          d.day as i32,
+          0,
+          0,
+          0,
+        ));
       sheet.cell_mut((3, i as u32 + 12)).set_value_string(n);
       sheet.cell_mut((7, i as u32 + 12)).set_value("1");
       sheet.cell_mut((8, i as u32 + 12)).set_value_number(*a);
@@ -74,11 +82,15 @@ mod tests {
     let book = read_reader(Cursor::new(out), true)?;
     let sheet = book.active_sheet();
     for (i, f) in fapiaos.iter().enumerate() {
-      assert_eq!(sheet.cell_value((2, i as u32 + 12)).data_type(), "s");
+      assert_eq!(sheet.cell_value((2, i as u32 + 12)).data_type(), "n");
+      let found_date =
+        excel_to_date_time_jiff(sheet.cell_value((2, i as u32 + 12)).value_number().unwrap());
+      assert_eq!(found_date.year(), f.date.unwrap().year.try_into().unwrap());
       assert_eq!(
-        sheet.cell_value((2, i as u32 + 12)).raw_value(),
-        &CellRawValue::String(f.date.as_ref().unwrap().clone().to_string().into())
+        found_date.month(),
+        f.date.unwrap().month.try_into().unwrap()
       );
+      assert_eq!(found_date.day(), f.date.unwrap().day.try_into().unwrap());
     }
     Ok(())
   }

@@ -73,9 +73,8 @@ enum Error {
   #[error(transparent)]
   RegexError(#[from] regex::Error),
 
-  #[error("can't parse fapiao from page {0}'")]
-  FapiaoParseError(u32),
-
+  // #[error("can't parse fapiao from page {0}'")]
+  // FapiaoParseError(u32),
   #[error(transparent)]
   ParseIntError(#[from] std::num::ParseIntError),
 

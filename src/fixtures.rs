@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use simple_datetime_rs::Date;
 
 use crate::model::Fapiao;
@@ -37,7 +39,7 @@ pub fn full_fapiao(i: usize) -> Fapiao {
   let n = 10e13 as usize + i;
   Fapiao {
     fapiao_number: Some(format!("{n}").to_string()),
-    date: Some(Date::today().sub_days(i as u64)),
+    date: Some(Date::new(2024, 3, 20).sub_days(i as u64)),
     amount: Some(123 as f32),
     vat_amount: Some(45 as f32),
     seller: Some("asdf".to_string()),
