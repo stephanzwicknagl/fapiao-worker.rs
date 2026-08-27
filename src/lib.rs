@@ -86,6 +86,9 @@ enum Error {
 
   #[error(transparent)]
   XlsxError(#[from] umya_spreadsheet::XlsxError),
+
+  #[error(transparent)]
+  PdfError(#[from] pdf_oxide::Error),
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use lopdf::Document;
+use pdf_oxide::PdfDocument;
 use regex::Regex;
 use simple_datetime_rs::Date;
 
@@ -12,11 +12,20 @@ const DAXIE: &str =
 pub fn extract(bytes_vec: Vec<Vec<u8>>) -> Result<Vec<Fapiao>> {
   let mut fapiaos: Vec<Fapiao> = vec![];
   for bytes in bytes_vec {
-    let doc = Document::load_from(&bytes[..])?;
-    let pages = doc.get_pages();
-    for (i, _) in pages {
-      let text = doc.extract_text(&[i])?;
-      fapiaos.push(parse_fapiao(text)?);
+    let doc = PdfDocument::from_bytes(bytes)?;
+    let pages_total = doc.page_count()?;
+    for i in 0..pages_total {
+      let text = doc.extract_text_auto(i)?;
+      let new = parse_fapiao(text.clone())?;
+      if new.date.is_none()
+        || new.fapiao_number.is_none()
+        || new.amount.is_none()
+        || new.vat_amount.is_none() && !new.skip
+      {
+        dbg!(&new);
+        dbg!(text);
+      }
+      fapiaos.push(new);
     }
   }
   sort_fapiaos(&mut fapiaos);
@@ -133,12 +142,15 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
 
   // ── AMOUNT (小写) ──────────────────────────────────────────────────────────
   // Try each strategy in order; first match wins.
-  let strategies: [AmountStrategy; 7] = [
+  let strategies: [AmountStrategy; 10] = [
     s1_labeled,
+    s1b_mixed_label,
     s2_didi,
     s3_daxie_prefix,
     s4_daxie_suffix,
     s4b_restaurant,
+    s4c_daxie_inline,
+    s4d_daxie_bare_inline,
     s5_metro,
     s6_bare_yen_triplet,
   ];
@@ -158,12 +170,14 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
   }
 
   // ── VAT AMOUNT ─────────────────────────────────────────────────────────────
-  let strategies: [VatStrategy; 6] = [
+  let strategies: [VatStrategy; 8] = [
     v1_inline,
+    v1b_heji_suffix,
     v2_heji_prefix,
     v3_daxie_suffix,
     v4_daxie_suffix,
     v5_bare_yen_triplet,
+    v5b_metro_inline,
     v6_bare_yen_fallback,
   ];
   let mut vat_amount = None;
@@ -222,9 +236,19 @@ fn rounded_for_cents(x: f32) -> f32 {
   (x * 100_f32).round() / 100_f32
 }
 
-/// S1: Labeled  （小写）¥xxx  ── Walmart, hotels
+/// S1: Labeled  （小写）¥xxx  ── Walmart, hotels.
+/// Also matches labels spaced out character-by-character: （ 小 写 ） ¥xxx (DiDi).
 fn s1_labeled(text: &str) -> Result<Option<f32>> {
-  let re = Regex::new(&format!(r"[（(]小写[）)]\s*[¥￥]\s*({})", NUM))?;
+  let re = Regex::new(&format!(r"[（(]\s*小\s*写\s*[）)]\s*[¥￥]\s*({})", NUM))?;
+  Ok(capture_amount(&re, text))
+}
+
+/// S1b: Jumbled one-line label ── （小写）价税合计（大写） ¥xxx (Wagas restaurant)
+fn s1b_mixed_label(text: &str) -> Result<Option<f32>> {
+  let re = Regex::new(&format!(
+    r"[（(]\s*小\s*写\s*[）)][^¥￥\n]{{0,30}}[¥￥]\s*({})",
+    NUM
+  ))?;
   Ok(capture_amount(&re, text))
 }
 
@@ -256,6 +280,26 @@ fn s4b_restaurant(text: &str) -> Result<Option<f32>> {
     return Ok(None);
   };
   total_matches(caps.get(1), caps.get(2), caps.get(3))
+}
+
+/// S4c: 大写 and ¥amount on the same line ── 伍佰肆拾贰圆整 ¥542.00
+fn s4c_daxie_inline(text: &str) -> Result<Option<f32>> {
+  let re = Regex::new(&format!(r"{}[ \t]*[¥￥]({})", DAXIE, NUM))?;
+  Ok(capture_amount(&re, text))
+}
+
+/// S4d: Metro inline ── P V\n大写T with no ¥ anywhere, where T = P + V.
+fn s4d_daxie_bare_inline(text: &str) -> Result<Option<f32>> {
+  let re = Regex::new(&format!(
+    r"({})[ \t]+({})[ \t]*\n[ \t]*{}({})",
+    NUM, NUM, DAXIE, NUM
+  ))?;
+  for caps in re.captures_iter(text) {
+    if let Some(t) = total_matches(caps.get(3), caps.get(1), caps.get(2))? {
+      return Ok(Some(t));
+    }
+  }
+  Ok(None)
 }
 
 /// S5: Metro/Makro format  ── three bare numbers (P, V, T with T = P + V)
@@ -326,6 +370,15 @@ fn v1_inline(text: &str, _amt: Option<f32>) -> Result<Option<f32>> {
   Ok(capture_amount(&re, text))
 }
 
+// V1b: 合计 label after the amounts ── ¥P ¥V\n合 计  (second ¥ value = VAT)
+fn v1b_heji_suffix(text: &str, _amt: Option<f32>) -> Result<Option<f32>> {
+  let re = Regex::new(&format!(
+    r"[¥￥]{}[ \t]+[¥￥]({})[ \t]*\n[ \t]*合\s*计",
+    NUM, NUM
+  ))?;
+  Ok(capture_amount(&re, text))
+}
+
 // V2: DiDi format  ── 合\n计\nP\n¥\nV\n¥
 fn v2_heji_prefix(text: &str, _amt: Option<f32>) -> Result<Option<f32>> {
   let re = Regex::new(&format!(r"合\n计\n{}\n[¥￥]\n({})\n[¥￥]", NUM, NUM))?;
@@ -364,6 +417,20 @@ fn v5_bare_yen_triplet(text: &str, _amt: Option<f32>) -> Result<Option<f32>> {
   let re = Regex::new(&format!(
     r"({})[ \t]*\n[ \t]*({})[ \t]*\n[ \t]*({})[ \t]*\n[ \t]*[^\d\n]",
     NUM, NUM, NUM
+  ))?;
+  for caps in re.captures_iter(text) {
+    if total_matches(caps.get(3), caps.get(1), caps.get(2))?.is_some() {
+      return Ok(caps.get(2).and_then(|v| clean(v.as_str()).parse().ok()));
+    }
+  }
+  Ok(None)
+}
+
+// V5b: Metro inline  ── P V\n大写T (T = P + V), second number = VAT
+fn v5b_metro_inline(text: &str, _amt: Option<f32>) -> Result<Option<f32>> {
+  let re = Regex::new(&format!(
+    r"({})[ \t]+({})[ \t]*\n[ \t]*{}({})",
+    NUM, NUM, DAXIE, NUM
   ))?;
   for caps in re.captures_iter(text) {
     if total_matches(caps.get(3), caps.get(1), caps.get(2))?.is_some() {
@@ -557,8 +624,25 @@ mod tests {
     Ok(())
   }
 
-  // ── garbled / skip detection ───────────────────────────────────────────────
+  use std::fs::File;
+  use std::io::prelude::*;
 
+  #[test]
+  fn test_with_real_fapiao() -> Result<()> {
+    let mut f = File::open("fixtures/sample.pdf")?;
+    let mut buffer = Vec::new();
+    f.read_to_end(&mut buffer)?;
+    let fapiaos = extract(vec![buffer])?;
+    assert_eq!(fapiaos.len(), 35);
+    assert_eq!(
+      fapiaos.iter().filter(|f| f.skip).collect::<Vec<_>>().len(),
+      6
+    );
+    // assert!(false);
+    Ok(())
+  }
+
+  // ── garbled / skip detection ───────────────────────────────────────────────
   #[test]
   fn test_skip_garbled_no_nian() -> Result<()> {
     // Pages without 年 are garbled (airline/train ticket PDFs).
@@ -752,6 +836,15 @@ mod tests {
   }
 
   #[test]
+  fn test_s4c_daxie_inline() -> Result<()> {
+    let result = parse(
+      "电子发票（普通发票）发票号码： 25327000001745891979\n开票日期： 2025年12月30日\n\n购 名称：asdf 销 名称：asdf\n买 售\n方 方\n信110105D00000116统一社会信用代码/纳税人识别号： 信91320691MA1MA9TQ5J统一社会信用代码/纳税人识别号：\n息 息\n项目名称\n规格型号\n单 位\n数 量\n单 价\n金 额税率/征收率\n税 额\n*旅游服务*代订住宿费1 511.3207547169811 511.32 6% 30.68\n\n\n¥511.32 ¥30.68\n合 计\n伍佰肆拾贰圆整 ¥542.00\n价税合计（大写）\n（小写）\n\n备\n注\n\n\n开票人：林哲宇\n\n\n下载次数：1",
+    )?;
+    assert_eq!(result.amount, Some(542.00));
+    Ok(())
+  }
+
+  #[test]
   fn test_s5_metro_format() -> Result<()> {
     // S5: P\nV\nT + non-numeric line, where T = P + V
     let result = s5_metro("年\n2024年1月1日\n94.34\n5.66\n100.00\n东西\n")?;
@@ -774,6 +867,44 @@ mod tests {
     Ok(())
   }
 
+  #[test]
+  fn test_s1_didi_spaced_label() -> Result<()> {
+    let result = parse(
+      "旅客运输服务\n电子发票（普通发票）发票号码: 25427000000579417592\n开票日期: 2025年12月21日\n\n\n购\n销\n名称：asdf\n名称：滴滴出行科技有限公司武汉分公司\n买\n售\n方\n方\n信\n信\n统一社会信用代码/纳税人识别号：110105D00000116统一社会信用代码/纳税人识别号：91420100MA4KUWB2XE\n息\n息\n项目名称 单\u{a0}\u{a0}价 数\u{a0}\u{a0}量 金\u{a0}\u{a0}额 税率/征收率 税\u{a0}\u{a0}额\n*运输服务*客运服务费1352.14 1 1352.14 3% 40.56\n*运输服务*客运服务费 -52.43 3% -1.57\n\n\n合 计 ¥1299.71 ¥38.99\n出行人 有效身份证件号 出行日期 出发地 到达地 等级 交通工具类型\n\n\n价 税 合 计 （ 大 写 ） 壹仟叁佰叁拾捌圆柒角整\n（ 小 写 ） ¥1338.70\n\n备\n注\n\n\n开票人： 王耸耸\n\ndidi",
+    )?;
+    assert_eq!(result.amount, Some(1338.70));
+    Ok(())
+  }
+
+  #[test]
+  fn test_s4d_metro_daxie_bare_total() -> Result<()> {
+    let result = parse(
+      "25427000000380731041\n税\n2025年12月30日\n\n\n美国驻武汉总领事馆\n上海麦德龙商贸有限公司武汉古田分公司\n\n\n*熟肉制品*秋林里道斯哈1包1 57.08 57.08 13% 7.42\n尔滨红肠500g\n*蔬菜加工品*麦臻选冷冻1袋1 22.5 22.50免税 ***\n毛豆仁1kg\n*熟肉制品*麦臻选黑猪肉1盒1 40.62 40.62 13% 5.28\n烤肠480g\n*果类加工品*丘比草莓酱1瓶1 21.06 21.06 13% 2.74\n340g\n*谷物*籽籽有味种籽组合1袋1 27.43 27.43 9% 2.47\n800g\n*日用杂品*包装费1 1 0.88 0.88 13% 0.12\n\n169.57 18.03\n壹佰捌拾柒圆陆角整187.60\n719_956891066338_20251230;\n\n\n李丽华",
+    )?;
+    assert_eq!(result.amount, Some(187.60));
+    Ok(())
+  }
+
+  #[test]
+  fn test_s1b_mixed_label_wagas() -> Result<()> {
+    let result = parse(
+      "电子发票（普通发票）发票号码： 25427000000001315475\n开票日期： 2025年11月12日\n\n购 销\n    名称：美国驻武汉总领事馆 名称：武汉沃歌斯餐饮有限公司\n买 售\n方 方\n信110105D00000116统一社会信用代码/纳税人识别号： 信91420104MA4F20818Y统一社会信用代码/纳税人识别号：\n息 息\n项目名称 规格型号\n单 位 数 量\n单 价 金 额 税率/征收率 税 额\n1 177.358490566037716 177.36 10.646%*餐饮服务*餐饮服务\n\n\n合 计 ¥177.36 ¥10.64\n\n壹佰捌拾捌圆整\n（小写）价税合计（大写） ¥188.00\n\n\n备 注\n\n\n开票人：顾思遥",
+    )?;
+    // 价税合计 total = 177.36 (pre-tax) + 10.64 (VAT) = 188.00
+    assert_eq!(result.amount, Some(188.00));
+    Ok(())
+  }
+
+  // Test Template for broken parsing
+  // #[test]
+  // fn test_amount_not_working() -> Result<()> {
+  //   let result = parse(
+  //   <broken string>
+  //   )?;
+  //   assert_eq!(result.amount, Some(<actual amount>));
+  //   Ok(())
+  // }
+
   // ── VAT strategies ─────────────────────────────────────────────────────────
 
   #[test]
@@ -781,6 +912,15 @@ mod tests {
     // V1: 合   计 ¥P ¥V
     let result = parse("年\n2024年1月1日\n（小写）¥188.50\n合     计  ¥176.17  ¥12.33")?;
     assert_eq!(result.vat_amount, Some(12.33));
+    Ok(())
+  }
+
+  #[test]
+  fn test_v1b_heji_suffix() -> Result<()> {
+    let result = parse(
+      "电子发票（普通发票）发票号码： 25327000001745891979\n开票日期： 2025年12月30日\n\n购 名称：asdf 销 名称：asdf\n买 售\n方 方\n信110105D00000116统一社会信用代码/纳税人识别号： 信91320691MA1MA9TQ5J统一社会信用代码/纳税人识别号：\n息 息\n项目名称\n规格型号\n单 位\n数 量\n单 价\n金 额税率/征收率\n税 额\n*旅游服务*代订住宿费1 511.3207547169811 511.32 6% 30.68\n\n\n¥511.32 ¥30.68\n合 计\n伍佰肆拾贰圆整 ¥542.00\n价税合计（大写）\n（小写）\n\n备\n注\n\n\n开票人：林哲宇\n\n\n下载次数：1",
+    )?;
+    assert_eq!(result.vat_amount, Some(30.68));
     Ok(())
   }
 
@@ -815,6 +955,25 @@ mod tests {
     Ok(())
   }
 
+  // Template for broken examples
+  #[test]
+  fn test_v5b_metro_inline() -> Result<()> {
+    let result = parse(
+      "25427000000380731041\n税\n2025年12月30日\n\n\n美国驻武汉总领事馆\n上海麦德龙商贸有限公司武汉古田分公司\n\n\n*熟肉制品*秋林里道斯哈1包1 57.08 57.08 13% 7.42\n尔滨红肠500g\n*蔬菜加工品*麦臻选冷冻1袋1 22.5 22.50免税 ***\n毛豆仁1kg\n*熟肉制品*麦臻选黑猪肉1盒1 40.62 40.62 13% 5.28\n烤肠480g\n*果类加工品*丘比草莓酱1瓶1 21.06 21.06 13% 2.74\n340g\n*谷物*籽籽有味种籽组合1袋1 27.43 27.43 9% 2.47\n800g\n*日用杂品*包装费1 1 0.88 0.88 13% 0.12\n\n169.57 18.03\n壹佰捌拾柒圆陆角整187.60\n719_956891066338_20251230;\n\n\n李丽华",
+    )?;
+    assert_eq!(result.vat_amount, Some(18.03));
+    Ok(())
+  }
+
+  // Template for broken examples
+  // #[test]
+  // fn test_vat_not_working() -> Result<()> {
+  //   let result = parse(
+  //     <example string>
+  //   )?;
+  //   assert_eq!(result.vat_amount, Some(<actual amount>));
+  //   Ok(())
+  // }
   // ── full parse integration ─────────────────────────────────────────────────
 
   #[test]
