@@ -17,14 +17,6 @@ pub fn extract(bytes_vec: Vec<Vec<u8>>) -> Result<Vec<Fapiao>> {
     for i in 0..pages_total {
       let text = doc.extract_text_auto(i)?;
       let new = parse_fapiao(text.clone())?;
-      if new.date.is_none()
-        || new.fapiao_number.is_none()
-        || new.amount.is_none()
-        || new.vat_amount.is_none() && !new.skip
-      {
-        dbg!(&new);
-        dbg!(text);
-      }
       fapiaos.push(new);
     }
   }
@@ -142,7 +134,7 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
 
   // ── AMOUNT (小写) ──────────────────────────────────────────────────────────
   // Try each strategy in order; first match wins.
-  let strategies: [AmountStrategy; 10] = [
+  let strategies: [AmountStrategy; 11] = [
     s1_labeled,
     s1b_mixed_label,
     s2_didi,
@@ -153,6 +145,7 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
     s4d_daxie_bare_inline,
     s5_metro,
     s6_bare_yen_triplet,
+    s8_heji_sum,
   ];
   let mut amount = None;
   for strategy in strategies {
@@ -261,7 +254,29 @@ fn s2_didi(text: &str) -> Result<Option<f32>> {
 /// S3: Amount precedes 大写  ── Meituan multi-page last page: ¥xxx\n大写
 fn s3_daxie_prefix(text: &str) -> Result<Option<f32>> {
   let re = Regex::new(&format!(r"[¥￥]({})\n{}", NUM, DAXIE))?;
-  Ok(capture_amount(&re, text))
+  let re_inline = Regex::new(&format!(r"^[ \t]*[¥￥]{}", NUM))?;
+  for caps in re.captures_iter(text) {
+    let Some(m) = caps.get(0) else { continue };
+    // Skip when the 大写 line continues with an inline ¥amount
+    // (壹佰圆整 ¥100.00) — the ¥xxx before it is then a 合计 line value
+    // (price or VAT), and the inline total is handled by s4c_daxie_inline.
+    if re_inline.is_match(&text[m.end()..]) {
+      continue;
+    }
+    // Skip when the ¥xxx is the second value of a "¥P ¥V" pair on its line
+    // (a 合计 line) — it is then the VAT, not the total.
+    let line_start = text[..m.start()].rfind('\n').map_or(0, |i| i + 1);
+    if text[line_start..m.start()].contains(['¥', '￥']) {
+      continue;
+    }
+    if let Some(a) = caps
+      .get(1)
+      .and_then(|n| clean(n.as_str()).parse::<f32>().ok())
+    {
+      return Ok(Some(a));
+    }
+  }
+  Ok(None)
 }
 
 /// S4: Amount follows 大写  ── e-commerce, travel: 大写\n¥xxx
@@ -346,6 +361,32 @@ fn s6_bare_yen_triplet(text: &str) -> Result<Option<f32>> {
       if b > 0_f32 && bare_set.contains(&b) && !approx_eq(b, *c, None) {
         return Ok(Some(*c));
       }
+    }
+  }
+  Ok(None)
+}
+
+/// S8: 合计 line with scattered total ── 合 计 ¥P ¥V where the 价税合计
+/// total ¥T (T = P + V) floats elsewhere in the extracted text.
+fn s8_heji_sum(text: &str) -> Result<Option<f32>> {
+  let re = Regex::new(&format!(r"合\s+计\s+[¥￥]({})\s+[¥￥]({})", NUM, NUM))?;
+  let Some(caps) = re.captures(text) else {
+    return Ok(None);
+  };
+  let (Some(p), Some(v)) = (caps.get(1), caps.get(2)) else {
+    return Ok(None);
+  };
+  let p: f32 = clean(p.as_str()).parse()?;
+  let v: f32 = clean(v.as_str()).parse()?;
+  let t = rounded_for_cents(p + v);
+  // Confirm a ¥amount equal to the sum exists somewhere in the text.
+  let re_yen = Regex::new(&format!(r"[¥￥]({})", NUM))?;
+  for caps in re_yen.captures_iter(text) {
+    if let Some(m) = caps.get(1)
+      && let Ok(a) = clean(m.as_str()).parse::<f32>()
+      && approx_eq(a, t, None)
+    {
+      return Ok(Some(t));
     }
   }
   Ok(None)
@@ -509,29 +550,78 @@ fn shift(c: char, from: char, to: char) -> char {
 /// 购\n买\n方\n信\n息.
 fn extract_buyer(text: &str) -> Result<Option<String>> {
   let re = Regex::new(r"购\s*买\s*方[\s\S]*?名称[：:][ \t]*([^\n]+)")?;
+  if let Some(name) = re
+    .captures(text)
+    .and_then(|c| c.get(1))
+    .map(|m| cut_at_next_label(m.as_str()))
+  {
+    return Ok(Some(name));
+  }
+  // Interleaved 购/销 column layout: the 购 and 销 header characters appear
+  // together (side by side or one per line), so the vertical 购买方 marker
+  // above cannot match. The first 名称 after the header is the buyer (the
+  // second is the seller).
+  let re = Regex::new(r"购\s+销[\s\S]{0,50}?名称[：:][ \t]*([^\n]+)")?;
+  if let Some(name) = re
+    .captures(text)
+    .and_then(|c| c.get(1))
+    .map(|m| cut_at_next_label(m.as_str()))
+  {
+    return Ok(Some(name));
+  }
+  // Fully inline layout: 购 名称：<buyer> 销 名称：<seller> on one line, so
+  // the buyer name directly follows the 购 label character.
+  let re = Regex::new(r"购[ \t]+名称[：:][ \t]*([^\n]+)")?;
   Ok(
     re.captures(text)
       .and_then(|c| c.get(1))
-      .map(|m| m.as_str().trim().to_string()),
+      .map(|m| cut_at_next_label(m.as_str())),
   )
+}
+
+/// Trim whitespace and cut a name at a following 名称 label on the same line
+/// (buyer and seller names are sometimes printed side by side on one line).
+fn cut_at_next_label(name: &str) -> String {
+  let name = match name.find("名称") {
+    Some(pos) => &name[..pos],
+    None => name,
+  };
+  let name = name.trim();
+  // A name cut at the next 名称 label may keep a trailing interleaved
+  // column-label character, e.g. "…公司 销 名称：…" → "…公司 销".
+  if let Some(last) = name.chars().last()
+    && ['购', '买', '方', '销', '售', '信', '息'].contains(&last)
+  {
+    let rest = &name[..name.len() - last.len_utf8()];
+    if rest.ends_with(char::is_whitespace) {
+      return rest.trim_end().to_string();
+    }
+  }
+  name.to_string()
 }
 
 /// Extract the seller name from fapiao text.
 fn extract_seller(text: &str) -> Result<Option<String>> {
   let buyer = extract_buyer(text)?;
 
-  // Pattern 1: explicit 名称：<seller> on the same line (DiDi-style fapiaos).
-  let re = Regex::new(r"名称[：:][ \t]*([^\n]+)")?;
-  for caps in re.captures_iter(text) {
-    let Some(m) = caps.get(1) else { continue };
-    let name = m.as_str().trim();
+  // Pattern 1: explicit 名称：<seller> (DiDi-style fapiaos). Buyer and seller
+  // names may share one line, so each name runs to the next 名称 label or to
+  // the end of the line.
+  let re = Regex::new(r"名称[：:][ \t]*")?;
+  for m in re.find_iter(text) {
+    let rest = &text[m.end()..];
+    let line = match rest.find('\n') {
+      Some(pos) => &rest[..pos],
+      None => rest,
+    };
+    let name = cut_at_next_label(line);
     if name.chars().count() > 255 {
       continue;
     }
-    if name.is_empty() || name.contains("名称") || buyer.as_deref() == Some(name) {
+    if name.is_empty() || buyer.as_deref() == Some(name.as_str()) {
       continue;
     }
-    return Ok(Some(name.to_string()));
+    return Ok(Some(name));
   }
 
   // Pattern 2: Railway e-tickets ── look for 中国铁路 with company suffix
@@ -638,7 +728,6 @@ mod tests {
       fapiaos.iter().filter(|f| f.skip).collect::<Vec<_>>().len(),
       6
     );
-    // assert!(false);
     Ok(())
   }
 
@@ -838,7 +927,7 @@ mod tests {
   #[test]
   fn test_s4c_daxie_inline() -> Result<()> {
     let result = parse(
-      "电子发票（普通发票）发票号码： 25327000001745891979\n开票日期： 2025年12月30日\n\n购 名称：asdf 销 名称：asdf\n买 售\n方 方\n信110105D00000116统一社会信用代码/纳税人识别号： 信91320691MA1MA9TQ5J统一社会信用代码/纳税人识别号：\n息 息\n项目名称\n规格型号\n单 位\n数 量\n单 价\n金 额税率/征收率\n税 额\n*旅游服务*代订住宿费1 511.3207547169811 511.32 6% 30.68\n\n\n¥511.32 ¥30.68\n合 计\n伍佰肆拾贰圆整 ¥542.00\n价税合计（大写）\n（小写）\n\n备\n注\n\n\n开票人：林哲宇\n\n\n下载次数：1",
+      "电子发票（普通发票）发票号码： 25327000001745891979\n开票日期： 2025年12月30日\n\n购 名称：asdf 销 名称：asdf\n买 售\n方 方\n信123456S01038015统一社会信用代码/纳税人识别号： 信91320691MA1MA9TQ5J统一社会信用代码/纳税人识别号：\n息 息\n项目名称\n规格型号\n单 位\n数 量\n单 价\n金 额税率/征收率\n税 额\n*旅游服务*代订住宿费1 511.3207547169811 511.32 6% 30.68\n\n\n¥511.32 ¥30.68\n合 计\n伍佰肆拾贰圆整 ¥542.00\n价税合计（大写）\n（小写）\n\n备\n注\n\n\n开票人：林哲宇\n\n\n下载次数：1",
     )?;
     assert_eq!(result.amount, Some(542.00));
     Ok(())
@@ -870,7 +959,7 @@ mod tests {
   #[test]
   fn test_s1_didi_spaced_label() -> Result<()> {
     let result = parse(
-      "旅客运输服务\n电子发票（普通发票）发票号码: 25427000000579417592\n开票日期: 2025年12月21日\n\n\n购\n销\n名称：asdf\n名称：滴滴出行科技有限公司武汉分公司\n买\n售\n方\n方\n信\n信\n统一社会信用代码/纳税人识别号：110105D00000116统一社会信用代码/纳税人识别号：91420100MA4KUWB2XE\n息\n息\n项目名称 单\u{a0}\u{a0}价 数\u{a0}\u{a0}量 金\u{a0}\u{a0}额 税率/征收率 税\u{a0}\u{a0}额\n*运输服务*客运服务费1352.14 1 1352.14 3% 40.56\n*运输服务*客运服务费 -52.43 3% -1.57\n\n\n合 计 ¥1299.71 ¥38.99\n出行人 有效身份证件号 出行日期 出发地 到达地 等级 交通工具类型\n\n\n价 税 合 计 （ 大 写 ） 壹仟叁佰叁拾捌圆柒角整\n（ 小 写 ） ¥1338.70\n\n备\n注\n\n\n开票人： 王耸耸\n\ndidi",
+      "旅客运输服务\n电子发票（普通发票）发票号码: 25427000000579417592\n开票日期: 2025年12月21日\n\n\n购\n销\n名称：asdf\n名称：滴滴出行科技有限公司武汉分公司\n买\n售\n方\n方\n信\n信\n统一社会信用代码/纳税人识别号：123456S01038015统一社会信用代码/纳税人识别号：91420100MA4KUWB2XE\n息\n息\n项目名称 单\u{a0}\u{a0}价 数\u{a0}\u{a0}量 金\u{a0}\u{a0}额 税率/征收率 税\u{a0}\u{a0}额\n*运输服务*客运服务费1352.14 1 1352.14 3% 40.56\n*运输服务*客运服务费 -52.43 3% -1.57\n\n\n合 计 ¥1299.71 ¥38.99\n出行人 有效身份证件号 出行日期 出发地 到达地 等级 交通工具类型\n\n\n价 税 合 计 （ 大 写 ） 壹仟叁佰叁拾捌圆柒角整\n（ 小 写 ） ¥1338.70\n\n备\n注\n\n\n开票人： 王耸耸\n\ndidi",
     )?;
     assert_eq!(result.amount, Some(1338.70));
     Ok(())
@@ -879,7 +968,7 @@ mod tests {
   #[test]
   fn test_s4d_metro_daxie_bare_total() -> Result<()> {
     let result = parse(
-      "25427000000380731041\n税\n2025年12月30日\n\n\n美国驻武汉总领事馆\n上海麦德龙商贸有限公司武汉古田分公司\n\n\n*熟肉制品*秋林里道斯哈1包1 57.08 57.08 13% 7.42\n尔滨红肠500g\n*蔬菜加工品*麦臻选冷冻1袋1 22.5 22.50免税 ***\n毛豆仁1kg\n*熟肉制品*麦臻选黑猪肉1盒1 40.62 40.62 13% 5.28\n烤肠480g\n*果类加工品*丘比草莓酱1瓶1 21.06 21.06 13% 2.74\n340g\n*谷物*籽籽有味种籽组合1袋1 27.43 27.43 9% 2.47\n800g\n*日用杂品*包装费1 1 0.88 0.88 13% 0.12\n\n169.57 18.03\n壹佰捌拾柒圆陆角整187.60\n719_956891066338_20251230;\n\n\n李丽华",
+      "25427000000380731041\n税\n2025年12月30日\n\n\n武汉总领事馆\n上海麦德龙商贸有限公司武汉古田分公司\n\n\n*熟肉制品*秋林里道斯哈1包1 57.08 57.08 13% 7.42\n尔滨红肠500g\n*蔬菜加工品*麦臻选冷冻1袋1 22.5 22.50免税 ***\n毛豆仁1kg\n*熟肉制品*麦臻选黑猪肉1盒1 40.62 40.62 13% 5.28\n烤肠480g\n*果类加工品*丘比草莓酱1瓶1 21.06 21.06 13% 2.74\n340g\n*谷物*籽籽有味种籽组合1袋1 27.43 27.43 9% 2.47\n800g\n*日用杂品*包装费1 1 0.88 0.88 13% 0.12\n\n169.57 18.03\n壹佰捌拾柒圆陆角整187.60\n719_956891066338_20251230;\n\n\n李丽华",
     )?;
     assert_eq!(result.amount, Some(187.60));
     Ok(())
@@ -888,13 +977,33 @@ mod tests {
   #[test]
   fn test_s1b_mixed_label_wagas() -> Result<()> {
     let result = parse(
-      "电子发票（普通发票）发票号码： 25427000000001315475\n开票日期： 2025年11月12日\n\n购 销\n    名称：美国驻武汉总领事馆 名称：武汉沃歌斯餐饮有限公司\n买 售\n方 方\n信110105D00000116统一社会信用代码/纳税人识别号： 信91420104MA4F20818Y统一社会信用代码/纳税人识别号：\n息 息\n项目名称 规格型号\n单 位 数 量\n单 价 金 额 税率/征收率 税 额\n1 177.358490566037716 177.36 10.646%*餐饮服务*餐饮服务\n\n\n合 计 ¥177.36 ¥10.64\n\n壹佰捌拾捌圆整\n（小写）价税合计（大写） ¥188.00\n\n\n备 注\n\n\n开票人：顾思遥",
+      "电子发票（普通发票）发票号码： 25427000000001315475\n开票日期： 2025年11月12日\n\n购 销\n    名称：武汉总领事馆 名称：武汉沃歌斯餐饮有限公司\n买 售\n方 方\n信123456S01038015统一社会信用代码/纳税人识别号： 信91420104MA4F20818Y统一社会信用代码/纳税人识别号：\n息 息\n项目名称 规格型号\n单 位 数 量\n单 价 金 额 税率/征收率 税 额\n1 177.358490566037716 177.36 10.646%*餐饮服务*餐饮服务\n\n\n合 计 ¥177.36 ¥10.64\n\n壹佰捌拾捌圆整\n（小写）价税合计（大写） ¥188.00\n\n\n备 注\n\n\n开票人：顾思遥",
     )?;
     // 价税合计 total = 177.36 (pre-tax) + 10.64 (VAT) = 188.00
     assert_eq!(result.amount, Some(188.00));
     Ok(())
   }
 
+  #[test]
+  fn test_amount_heji_line_before_daxie_inline_total() -> Result<()> {
+    // The 合计 line (¥P ¥V) directly precedes the inline 大写 ¥T total, so
+    // s3_daxie_prefix must not mistake the VAT for the total.
+    let result = parse(
+      "电子发票（普通发票）发票号码： 25422000000209459092\n开票日期： 2025年11月12日\n\n    \n\n购 销\n    名称：武汉总领事馆 名称：武汉卡斯餐饮管理有限公司\n买 售\n方 方\n信123456S01038015统一社会信用代码/纳税人识别号： 信91420105MABXUPAC0J统一社会信用代码/纳税人识别号：\n息 息\n项目名称 规格型号\n单 位\n数 量\n单 价\n金 额 税率/征收率 税 额\n*餐饮服务*餐饮费1%103.54 1.04\n\n\n合 计 ¥103.54 ¥1.04\n壹佰零肆圆伍角捌分 ¥104.58\n价税合计（大写） （小写）\n\n备\n注\n\n\n开票人：郑锦煌\n\n\n下载次数： 1",
+    )?;
+    assert_eq!(result.amount, Some(104.58));
+    Ok(())
+  }
+  #[test]
+  fn test_amount_scattered_xiaoxie_with_heji_line() -> Result<()> {
+    // The 小写 total (¥128.68) is scattered away from the 价税合计 block, so
+    // it is recovered via 合 计 ¥P ¥V where T = P + V.
+    let result = parse(
+      "电子发票（普通发票）发票号码： 25322000000563714767\n开票日期： 2025年11月27日\n\n    \n\n购 销\n    名称：武汉总领事馆 名称：江苏鱼跃电子科技有限公司\n买 售\n方 方\n信123456S01038015统一社会信用代码/纳税人识别号： 信91321181748726127F统一社会信用代码/纳税人识别号：\n息 息\n¥128.68\n\n\n名称： 江苏鱼跃电子科技有限公司\n\n统一社会信用代码/纳税人识别号： 91321181748726127F\n\n项目名称 规格型号\n单 位\n数 量\n单 价\n金 额税率/征收率\n税 额\n*医疗仪器器械*【优惠 YE660E新1 113.8761061946903 13%113.88 14.80\n价】鱼跃电子血压计测量\n仪高精准测压仪家用正品\n医用官方旗\n\n\n合 计 ¥113.88 ¥14.80\n壹佰贰拾捌圆陆角捌分\n价税合计（大写） （小写）\nALI722151398022365184\n备\n注\n\n\n开票人：汤晨露\n\n\n下载次数： 1",
+    )?;
+    assert_eq!(result.amount, Some(128.68));
+    Ok(())
+  }
   // Test Template for broken parsing
   // #[test]
   // fn test_amount_not_working() -> Result<()> {
@@ -918,7 +1027,7 @@ mod tests {
   #[test]
   fn test_v1b_heji_suffix() -> Result<()> {
     let result = parse(
-      "电子发票（普通发票）发票号码： 25327000001745891979\n开票日期： 2025年12月30日\n\n购 名称：asdf 销 名称：asdf\n买 售\n方 方\n信110105D00000116统一社会信用代码/纳税人识别号： 信91320691MA1MA9TQ5J统一社会信用代码/纳税人识别号：\n息 息\n项目名称\n规格型号\n单 位\n数 量\n单 价\n金 额税率/征收率\n税 额\n*旅游服务*代订住宿费1 511.3207547169811 511.32 6% 30.68\n\n\n¥511.32 ¥30.68\n合 计\n伍佰肆拾贰圆整 ¥542.00\n价税合计（大写）\n（小写）\n\n备\n注\n\n\n开票人：林哲宇\n\n\n下载次数：1",
+      "电子发票（普通发票）发票号码： 25327000001745891979\n开票日期： 2025年12月30日\n\n购 名称：asdf 销 名称：asdf\n买 售\n方 方\n信123456S01038015统一社会信用代码/纳税人识别号： 信91320691MA1MA9TQ5J统一社会信用代码/纳税人识别号：\n息 息\n项目名称\n规格型号\n单 位\n数 量\n单 价\n金 额税率/征收率\n税 额\n*旅游服务*代订住宿费1 511.3207547169811 511.32 6% 30.68\n\n\n¥511.32 ¥30.68\n合 计\n伍佰肆拾贰圆整 ¥542.00\n价税合计（大写）\n（小写）\n\n备\n注\n\n\n开票人：林哲宇\n\n\n下载次数：1",
     )?;
     assert_eq!(result.vat_amount, Some(30.68));
     Ok(())
@@ -959,7 +1068,7 @@ mod tests {
   #[test]
   fn test_v5b_metro_inline() -> Result<()> {
     let result = parse(
-      "25427000000380731041\n税\n2025年12月30日\n\n\n美国驻武汉总领事馆\n上海麦德龙商贸有限公司武汉古田分公司\n\n\n*熟肉制品*秋林里道斯哈1包1 57.08 57.08 13% 7.42\n尔滨红肠500g\n*蔬菜加工品*麦臻选冷冻1袋1 22.5 22.50免税 ***\n毛豆仁1kg\n*熟肉制品*麦臻选黑猪肉1盒1 40.62 40.62 13% 5.28\n烤肠480g\n*果类加工品*丘比草莓酱1瓶1 21.06 21.06 13% 2.74\n340g\n*谷物*籽籽有味种籽组合1袋1 27.43 27.43 9% 2.47\n800g\n*日用杂品*包装费1 1 0.88 0.88 13% 0.12\n\n169.57 18.03\n壹佰捌拾柒圆陆角整187.60\n719_956891066338_20251230;\n\n\n李丽华",
+      "25427000000380731041\n税\n2025年12月30日\n\n\n武汉总领事馆\n上海麦德龙商贸有限公司武汉古田分公司\n\n\n*熟肉制品*秋林里道斯哈1包1 57.08 57.08 13% 7.42\n尔滨红肠500g\n*蔬菜加工品*麦臻选冷冻1袋1 22.5 22.50免税 ***\n毛豆仁1kg\n*熟肉制品*麦臻选黑猪肉1盒1 40.62 40.62 13% 5.28\n烤肠480g\n*果类加工品*丘比草莓酱1瓶1 21.06 21.06 13% 2.74\n340g\n*谷物*籽籽有味种籽组合1袋1 27.43 27.43 9% 2.47\n800g\n*日用杂品*包装费1 1 0.88 0.88 13% 0.12\n\n169.57 18.03\n壹佰捌拾柒圆陆角整187.60\n719_956891066338_20251230;\n\n\n李丽华",
     )?;
     assert_eq!(result.vat_amount, Some(18.03));
     Ok(())
@@ -1039,15 +1148,49 @@ mod tests {
   }
 
   #[test]
+  fn test_seller_didi_names_row_inside_vertical_labels() -> Result<()> {
+    // DiDi layout: the names row (buyer then seller) sits between the 购/销
+    // header row and the remaining vertical label characters.
+    let result = parse(
+      "旅客运输服务\n电子发票（普通发票）发票号码: 25317000003403576054\n开票日期: 2025年12月30日\n\n\n购\n销\n名称：我的公司\n名称：上海滴滴畅行科技有限公司\n买\n售\n方\n方\n信\n信\n统一社会信用代码/纳税人识别号：34838410948754统一社会信用代码/纳税人识别号：91310114MA1GW61J6U\n息\n息\n项目名称 单\u{a0}\u{a0}价 数\u{a0}\u{a0}量 金\u{a0}\u{a0}额 税率/征收率 税\u{a0}\u{a0}额\n*运输服务*客运服务费177.28 1 177.28 3% 5.32\n*运输服务*客运服务费 -16.99 3% -0.51\n\n\n合 计 ¥160.29 ¥4.81\n出行人 有效身份证件号 出行日期 出发地 到达地 等级 交通工具类型\n\n\n价 税 合 计 （ 大 写 ） 壹佰陆拾伍圆壹角整\n（ 小 写 ） ¥165.10\n\n备\n注\n\n\n开票人： 于秋红\n\ndidi",
+    )?;
+    assert_eq!(result.seller.as_deref(), Some("上海滴滴畅行科技有限公司"));
+    Ok(())
+  }
+
+  #[test]
+  fn test_seller_labels_and_names_inline_on_one_line() -> Result<()> {
+    // Fully inline layout: 购 名称：<buyer> 销 名称：<seller> on one line,
+    // with the remaining label characters on following lines.
+    let result = parse(
+      "电子发票（普通发票）发票号码： 25327000001745891979\n开票日期： 2025年12月30日\n\n购 名称：武汉总领事馆 销 名称：上海赫程国际旅行社有限公司南通分公司\n买 售\n方 方\n信123456S01038015统一社会信用代码/纳税人识别号： 信91320691MA1MA9TQ5J统一社会信用代码/纳税人识别号：\n息 息\n项目名称\n规格型号\n单 位\n数 量\n单 价\n金 额税率/征收率\n税 额\n*旅游服务*代订住宿费1 511.3207547169811 511.32 6% 30.68\n\n\n¥511.32 ¥30.68\n合 计\n伍佰肆拾贰圆整 ¥542.00\n价税合计（大写）\n（小写）\n\n备\n注\n\n\n开票人：林哲宇\n\n\n下载次数：1",
+    )?;
+    assert_eq!(
+      result.seller.as_deref(),
+      Some("上海赫程国际旅行社有限公司南通分公司")
+    );
+    Ok(())
+  }
+
+  #[test]
   fn test_seller_didi_label_order() -> Result<()> {
     // DiDi layout: 销售方 label, 购买方 label, then buyer name, then seller name.
     let result = parse(
-      "年\n2024年1月1日\n销\n售\n方\n信\n息\n购\n买\n方\n信\n息\n名称：啦啦啦\n统一社会信用代码/纳税人识别号：110105D00000116\n名称：滴滴出行科技有限公司武汉分公司\n（小写）¥50.00",
+      "年\n2024年1月1日\n销\n售\n方\n信\n息\n购\n买\n方\n信\n息\n名称：啦啦啦\n统一社会信用代码/纳税人识别号：123456S01038015\n名称：滴滴出行科技有限公司武汉分公司\n（小写）¥50.00",
     )?;
     assert_eq!(
       result.seller.as_deref(),
       Some("滴滴出行科技有限公司武汉分公司")
     );
+    Ok(())
+  }
+
+  #[test]
+  fn test_seller_buyer_and_seller_names_share_one_line() -> Result<()> {
+    let result = parse(
+      "电子发票（普通发票）发票号码： 25332000000543115994\n开票日期： 2025年11月27日\n\n    \n\n购 销\n    名称：asdf asd 名称：杭州芙茂电子商务有限公司\n买 售\n方 方\n信123456S01038015统一社会信用代码/纳税人识别号： 信91441900MADWQ9GLXR统一社会信用代码/纳税人识别号：\n息 息\n项目名称 规格型号\n单 位\n数 量\n单 价\n金 额 税率/征收率 税 额\n*家具*家具\n件1 648.6725663716815 648.67 13% 84.33\n\n\n合 计 ¥648.67 ¥84.33\n柒佰叁拾叁圆整 ¥733.00\n价税合计（大写） （小写）\n\n备\n注\n\n\n开票人：李洋\n\n\n下载次数： 1",
+    )?;
+    assert_eq!(result.seller, Some("杭州芙茂电子商务有限公司".to_string()));
     Ok(())
   }
 
