@@ -1,6 +1,6 @@
+use jiff::civil::{Date, date};
 use pdf_oxide::PdfDocument;
 use regex::Regex;
-use simple_datetime_rs::Date;
 
 use crate::Result;
 use crate::model::Fapiao;
@@ -109,7 +109,7 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
     && let Some(m) = caps.get(2)
     && let Some(d) = caps.get(3)
   {
-    let date: Date = Date::new(
+    let date: Date = date(
       y.as_str().parse()?,
       m.as_str().parse()?,
       d.as_str().parse()?,
@@ -123,7 +123,7 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
       && let Some(m) = caps.get(2)
       && let Some(d) = caps.get(3)
     {
-      let date: Date = Date::new(
+      let date: Date = date(
         y.as_str().parse()?,
         m.as_str().parse()?,
         d.as_str().parse()?,
@@ -682,10 +682,8 @@ fn approx_eq(a: f32, b: f32, tol: Option<f32>) -> bool {
 
 #[cfg(test)]
 mod tests {
-  use simple_datetime_rs::Format;
-
   use super::*;
-  use crate::fixtures::{full_fapiao, many};
+  use crate::fixtures::full_fapiao;
 
   // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -699,11 +697,6 @@ mod tests {
     assert_eq!(clean("  99 "), "99".to_string());
     assert_eq!(clean("1,000,000.00"), "1000000.00".to_string());
     Ok(())
-  }
-
-  /// "YYYY-MM-DD" string so dates can be compared like the Python tests do.
-  fn date_str(f: &Fapiao) -> Option<String> {
-    f.date.as_ref().map(|d| d.format("%Y-%m-%d").unwrap())
   }
 
   #[test]
@@ -790,14 +783,14 @@ mod tests {
   #[test]
   fn test_date_parsed_correctly() -> Result<()> {
     let result = parse("年\n2024年3月5日")?;
-    assert_eq!(date_str(&result).as_deref(), Some("2024-03-05"));
+    assert_eq!(result.date, Some(date(2024, 03, 05)));
     Ok(())
   }
 
   #[test]
   fn test_date_two_digit_day_month() -> Result<()> {
     let result = parse("年\n2023年12月31日")?;
-    assert_eq!(date_str(&result).as_deref(), Some("2023-12-31"));
+    assert_eq!(result.date, Some(date(2023, 12, 31)));
     Ok(())
   }
 
@@ -816,7 +809,7 @@ mod tests {
     let result = parse(
       "发票号码：012345678901234\n2024年3月10日\n开票日期：2024年3月15日\n（小写）¥188.50\n名称：测试公司有限公司\n年",
     )?;
-    assert_eq!(date_str(&result).as_deref(), Some("2024-03-15"));
+    assert_eq!(result.date, Some(date(2024, 03, 15)));
     Ok(())
   }
 
@@ -825,7 +818,7 @@ mod tests {
     let result = parse(
       "发票号码：012345678901234\n2024年3月10日\n开票日期:2024年3月20日\n（小写）¥188.50\n名称：测试公司有限公司\n年",
     )?;
-    assert_eq!(date_str(&result).as_deref(), Some("2024-03-20"));
+    assert_eq!(result.date, Some(date(2024, 03, 20)));
     Ok(())
   }
 
@@ -834,7 +827,7 @@ mod tests {
     let result = parse(
       "发票号码：012345678901234\n2024年3月10日\n开票日期：2024年3月25日\n（小写）¥188.50\n名称：测试公司有限公司\n年",
     )?;
-    assert_eq!(date_str(&result).as_deref(), Some("2024-03-25"));
+    assert_eq!(result.date, Some(date(2024, 03, 25)));
     Ok(())
   }
 
@@ -843,7 +836,7 @@ mod tests {
     let result = parse(
       "发票号码：012345678901234\n2024年3月10日\n开票日期: 2024年3月30日\n（小写）¥188.50\n名称：测试公司有限公司\n年",
     )?;
-    assert_eq!(date_str(&result).as_deref(), Some("2024-03-30"));
+    assert_eq!(result.date, Some(date(2024, 03, 30)));
     Ok(())
   }
 
@@ -853,7 +846,7 @@ mod tests {
     let result = parse(
       "发票号码：012345678901234\n2024年3月15日\n（小写）¥188.50\n名称：测试公司有限公司\n年",
     )?;
-    assert_eq!(date_str(&result).as_deref(), Some("2024-03-15"));
+    assert_eq!(result.date, Some(date(2024, 03, 15)));
     Ok(())
   }
 
@@ -863,7 +856,7 @@ mod tests {
     let result = parse(
       "发票号码:26429165848005761994\n广州南站\n2026年06月19日\n电子发票（铁路电子客票）\n07:25开\n票价:￥203.00\n开票日期:2026年06月21日\n买票请到12306 发货请到95306\n中国铁路祝您旅途愉快\n",
     )?;
-    assert_eq!(date_str(&result).as_deref(), Some("2026-06-21"));
+    assert_eq!(result.date, Some(date(2026, 06, 21)));
     Ok(())
   }
 
@@ -1092,7 +1085,7 @@ mod tests {
     )?;
     assert!(!result.skip);
     assert_eq!(result.fapiao_number.as_deref(), Some("012345678901234"));
-    assert_eq!(date_str(&result).as_deref(), Some("2024-03-15"));
+    assert_eq!(result.date, Some(date(2024, 03, 15)));
     assert_eq!(result.amount, Some(188.50));
     assert_eq!(result.vat_amount, Some(12.33));
     assert_eq!(
@@ -1227,7 +1220,7 @@ mod tests {
       result.fapiao_number.as_deref(),
       Some("26449124088000208438")
     );
-    assert_eq!(date_str(&result).as_deref(), Some("2026-06-22"));
+    assert_eq!(result.date, Some(date(2026, 06, 22)));
     assert_eq!(result.amount, Some(134.00));
     assert_eq!(result.seller.as_deref(), Some("中国铁路"));
     Ok(())
@@ -1269,19 +1262,19 @@ mod tests {
   fn test_fapiaos_sorted_by_date() -> Result<()> {
     let mut fapiaos = vec![
       Fapiao {
-        date: Some(Date::new(2024, 3, 15)),
+        date: Some(date(2024, 3, 15)),
         ..full_fapiao(0)
       },
       Fapiao {
-        date: Some(Date::new(2024, 3, 15)),
+        date: Some(date(2024, 3, 15)),
         ..full_fapiao(0)
       },
       Fapiao {
-        date: Some(Date::new(2024, 1, 10)),
+        date: Some(date(2024, 1, 10)),
         ..full_fapiao(1)
       },
       Fapiao {
-        date: Some(Date::new(2024, 5, 1)),
+        date: Some(date(2024, 5, 1)),
         ..full_fapiao(2)
       },
     ];
@@ -1290,10 +1283,10 @@ mod tests {
     assert_eq!(
       fapiaos.iter().map(|f| f.date).collect::<Vec<_>>(),
       vec![
-        Some(Date::new(2024, 1, 10)),
-        Some(Date::new(2024, 3, 15)),
-        Some(Date::new(2024, 3, 15)),
-        Some(Date::new(2024, 5, 1)),
+        Some(date(2024, 1, 10)),
+        Some(date(2024, 3, 15)),
+        Some(date(2024, 3, 15)),
+        Some(date(2024, 5, 1)),
       ]
     );
     Ok(())
@@ -1303,12 +1296,12 @@ mod tests {
   fn test_fapiaos_sorted_secondary_by_amount() -> Result<()> {
     let mut fapiaos = vec![
       Fapiao {
-        date: Some(Date::new(2024, 3, 15)),
+        date: Some(date(2024, 3, 15)),
         amount: Some(10.00),
         ..full_fapiao(0)
       },
       Fapiao {
-        date: Some(Date::new(2024, 3, 15)),
+        date: Some(date(2024, 3, 15)),
         amount: Some(20.00),
         ..full_fapiao(0)
       },
@@ -1325,7 +1318,7 @@ mod tests {
   fn test_fapiaos_sorted_with_none_dates() -> Result<()> {
     let mut fapiaos = vec![
       Fapiao {
-        date: Some(Date::new(2024, 3, 15)),
+        date: Some(date(2024, 3, 15)),
         ..full_fapiao(0)
       },
       Fapiao {
@@ -1333,7 +1326,7 @@ mod tests {
         ..full_fapiao(1)
       },
       Fapiao {
-        date: Some(Date::new(2024, 1, 10)),
+        date: Some(date(2024, 1, 10)),
         ..full_fapiao(2)
       },
     ];

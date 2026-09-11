@@ -79,13 +79,16 @@ enum Error {
   ParseIntError(#[from] std::num::ParseIntError),
 
   #[error(transparent)]
-  DateError(#[from] simple_datetime_rs::DateError),
+  DateError(#[from] jiff::Error),
 
   #[error(transparent)]
   ParseFloatError(#[from] std::num::ParseFloatError),
 
   #[error(transparent)]
   XlsxError(#[from] umya_spreadsheet::XlsxError),
+
+  #[error(transparent)]
+  ZipError(#[from] zip::result::ZipError),
 
   #[error(transparent)]
   PdfError(#[from] pdf_oxide::Error),

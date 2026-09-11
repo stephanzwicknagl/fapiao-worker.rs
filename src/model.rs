@@ -1,4 +1,5 @@
-use simple_datetime_rs::Date;
+// use simple_datetime_rs::Date;
+use jiff::civil::Date;
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Fapiao {

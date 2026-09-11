@@ -540,14 +540,15 @@ name = "fapiao-worker"
 version = "0.1.0"
 dependencies = [
  "getrandom",
+ "jiff",
  "js-sys",
  "lopdf",
  "pdf_oxide",
  "regex",
- "simple-datetime-rs",
  "thiserror",
  "umya-spreadsheet",
  "wasm-bindgen",
+ "zip",
 ]
 
 [[package]]
@@ -1363,15 +1364,6 @@ name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
-
-[[package]]
-name = "simple-datetime-rs"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe2fecd21081ad13ce93b2e91fbf308ecbc4095e37c26dd33935804bb834b4de"
-dependencies = [
- "wasm-bindgen",
-]
 
 [[package]]
 name = "siphasher"
