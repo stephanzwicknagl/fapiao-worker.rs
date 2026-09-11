@@ -81,20 +81,17 @@
     }
     #warnings-box ul { margin: 0.5rem 0 0; }
   </style>
-  <!-- <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}"> -->
-  <!-- <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', -->
-  <!-- filename='favicon-32x32.png') }}"> -->
-  <!-- <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', -->
-  <!-- filename='favicon-16x16.png') }}"> -->
+  <link rel="icon" type="image/png" sizes="32x32" href="static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="static/favicon-16x16.png">
 </head>
 <body>
   <header>
-    <!-- <a href="/"> -->
-    <!--   <picture> -->
-    <!--     <source media="(prefers-color-scheme: dark)" srcset="{{ url_for('static', filename='images/default-monochrome-white.svg') }}"> -->
-    <!--     <img src="{{ url_for('static', filename='images/default-monochrome.svg') }}" alt="fapiao worker" height="52"> -->
-    <!--   </picture> -->
-    <!-- </a> -->
+    <a href="#">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="static/images/default-monochrome-white.svg">
+        <img src="static/images/default-monochrome.svg" alt="fapiao worker" height="52">
+      </picture>
+    </a>
     <h1>Fapiao Claim Form Processor</h1>
     <p>Upload your fapiao PDFs and the Excel template — get back a filled claim form.</p>
   </header>
