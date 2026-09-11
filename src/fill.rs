@@ -13,18 +13,10 @@ pub fn insert_fapiao_info_in_xlsx(excel_bytes: Vec<u8>, fapiaos: Vec<Fapiao>) ->
   let book = read_reader(Cursor::new(excel_bytes), true)?;
   let mut out: Vec<u8> = Vec::new();
   write_writer(&edit_xlsx(book, fapiaos)?, &mut out)?;
-  force_full_recalc_on_load(out)
+  force_full_formula_recalc_on_next_load(out)
 }
 
-/// Patches `xl/workbook.xml` inside the xlsx archive so spreadsheet apps
-/// recalculate all formulas when the file is opened.
-///
-/// `umya-spreadsheet` preserves the formula cells' cached values from the
-/// template (e.g. sums over the empty rows show `0`) and always writes
-/// `<calcPr calcId="122211"/>` without `fullCalcOnLoad`. Viewers that do not
-/// recalculate eagerly (WPS, Google Sheets, mobile previews, ...) then display
-/// the stale cache. Setting `fullCalcOnLoad="1"` forces a full recalculation.
-fn force_full_recalc_on_load(xlsx_bytes: Vec<u8>) -> Result<Vec<u8>> {
+fn force_full_formula_recalc_on_next_load(xlsx_bytes: Vec<u8>) -> Result<Vec<u8>> {
   let mut archive = zip::ZipArchive::new(Cursor::new(xlsx_bytes))?;
   let mut out = Cursor::new(Vec::new());
   {
@@ -103,8 +95,6 @@ fn edit_xlsx(mut book: Workbook, fapiaos: Vec<Fapiao>) -> Result<Workbook> {
 
 #[cfg(test)]
 mod tests {
-  use std::io::Read as _;
-
   use umya_spreadsheet::CellRawValue;
   use umya_spreadsheet::helper::date::excel_to_date_time_jiff;
 
