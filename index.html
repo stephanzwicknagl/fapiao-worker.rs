@@ -23,6 +23,8 @@
     }
 
     form small { display: block; }
+    .checkbox-label { display: flex; align-items: center; gap: 0.5rem; font-weight: normal; }
+    .checkbox-label input[type=checkbox] { width: auto; margin: 0; }
     .spinner { display: none; }
     form.loading .spinner { display: inline; }
     form.loading button[type=submit] { opacity: 0.6; pointer-events: none; }
@@ -106,6 +108,11 @@
       <input type="file" id="xlsx-input" accept=".xlsx" required>
       <small>The VAT Reimbursement Claim Form (.xlsx). The original is never modified.</small>
 
+      <label class="checkbox-label" for="sorted-pdf-checkbox">
+        <input type="checkbox" id="sorted-pdf-checkbox">
+        Also download my fapiaos merged into one PDF, sorted by date
+      </label>
+
       <button type="submit">
         <span class="spinner" aria-hidden="true">⏳ </span>
         <span class="label">Process and download</span>
@@ -133,7 +140,7 @@
   <footer>Fapiao Worker — files never leave your computer. All processing is done locally.</footer>
 
   <script type="module">
-    import init, { fill_claim_form } from "./pkg/fapiao_worker.js";
+    import init, { fill_claim_form, merge_sorted_pdfs } from "./pkg/fapiao_worker.js";
     await init();
 
     const form = document.querySelector("#claim-form");
@@ -156,6 +163,15 @@
       warningsBox.hidden = false;
     }
 
+    function download(bytes, filename, type) {
+      const url = URL.createObjectURL(new Blob([bytes], { type }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       errorBox.hidden = true;
@@ -175,15 +191,16 @@
 
         const { bytes, warnings } = fill_claim_form(pdfBytes, xlsxBytes);
 
-        const blob = new Blob([bytes], {
-          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = xlsxFile.name.replace(/\.xlsx$/i, "") + "-filled.xlsx";
-        a.click();
-        URL.revokeObjectURL(url);
+        download(
+          bytes,
+          xlsxFile.name.replace(/\.xlsx$/i, "") + "-filled.xlsx",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        );
+
+        if (document.querySelector("#sorted-pdf-checkbox").checked) {
+          const merged = merge_sorted_pdfs(pdfBytes);
+          download(merged, "fapiaos-sorted.pdf", "application/pdf");
+        }
 
         renderWarnings(warnings);
       } catch (err) {

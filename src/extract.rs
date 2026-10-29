@@ -16,7 +16,8 @@ pub fn extract(bytes_vec: Vec<Vec<u8>>) -> Result<Vec<Fapiao>> {
     let pages_total = doc.page_count()?;
     for i in 0..pages_total {
       let text = doc.extract_text_auto(i)?;
-      let new = parse_fapiao(text.clone())?;
+      let raw = doc.get_page_content_data(i)?;
+      let new = parse_fapiao(text.clone(), raw)?;
       fapiaos.push(new);
     }
   }
@@ -34,7 +35,7 @@ fn sort_fapiaos(fapiaos: &mut Vec<Fapiao>) {
   });
 }
 
-fn parse_fapiao(text: String) -> Result<Fapiao> {
+fn parse_fapiao(text: String, raw_content: Vec<u8>) -> Result<Fapiao> {
   // Normalize full-width characters to ASCII
   let text = normalize_fullwidth(&text);
 
@@ -102,34 +103,16 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
   }
 
   // ── DATE ───────────────────────────────────────────────────────────────────
-  // Prefer 开票日期 (invoice issue date) if available - this is the official fapiao date
-  let re = Regex::new(r"开票日期[：:]\s*(\d{4})年(\d{1,2})月(\d{1,2})日")?;
-  if let Some(caps) = re.captures(&text)
-    && let Some(y) = caps.get(1)
-    && let Some(m) = caps.get(2)
-    && let Some(d) = caps.get(3)
-  {
-    let date: Date = date(
-      y.as_str().parse()?,
-      m.as_str().parse()?,
-      d.as_str().parse()?,
-    );
-    fapiao.date = Some(date);
-  } else {
-    // Fallback: find any date if 开票日期 not found
-    let re = Regex::new(r"(\d{4})年(\d{1,2})月(\d{1,2})日")?;
-    if let Some(caps) = re.captures(&text)
-      && let Some(y) = caps.get(1)
-      && let Some(m) = caps.get(2)
-      && let Some(d) = caps.get(3)
-    {
-      let date: Date = date(
-        y.as_str().parse()?,
-        m.as_str().parse()?,
-        d.as_str().parse()?,
-      );
-      fapiao.date = Some(date);
-    }
+  // D1: prefer 开票日期 (invoice issue date) — the official fapiao date.
+  fapiao.date = d1_kaijiao_riqi(&text)?;
+  // D2: some PDFs use fonts without a ToUnicode CMap, so the text layer is garbled and
+  // D1 cannot match; recover the date from the raw page content stream
+  if fapiao.date.is_none() {
+    fapiao.date = d2_kaijiao_riqi_gbk(&raw_content)?;
+  }
+  // D3: fallback — first date found anywhere.
+  if fapiao.date.is_none() {
+    fapiao.date = d3_any_date(&text)?;
   }
 
   // ── AMOUNT (小写) ──────────────────────────────────────────────────────────
@@ -199,6 +182,90 @@ fn parse_fapiao(text: String) -> Result<Fapiao> {
 
 type AmountStrategy = fn(&str) -> Result<Option<f32>>;
 type VatStrategy = fn(&str, Option<f32>) -> Result<Option<f32>>;
+
+// ── date strategies ──────────────────────────────────────────────────────────
+
+/// Build a date from regex capture groups 1..=3 (year, month, day).
+fn date_from_caps(caps: &regex::Captures) -> Result<Option<Date>> {
+  let (Some(y), Some(m), Some(d)) = (caps.get(1), caps.get(2), caps.get(3)) else {
+    return Ok(None);
+  };
+  Ok(Some(date(
+    y.as_str().parse()?,
+    m.as_str().parse()?,
+    d.as_str().parse()?,
+  )))
+}
+
+/// D1: Labeled 开票日期：YYYY年M月D日 —— the official fapiao issue date.
+fn d1_kaijiao_riqi(text: &str) -> Result<Option<Date>> {
+  let re = Regex::new(r"开票日期[：:]\s*(\d{4})年(\d{1,2})月(\d{1,2})日")?;
+  match re.captures(text) {
+    Some(caps) => date_from_caps(&caps),
+    None => Ok(None),
+  }
+}
+
+/// GBK byte encoding of 开票日期.
+const KAIJIAO_RIQI_GBK: &[u8] = b"\xBF\xAA\xC6\xB1\xC8\xD5\xC6\xDA";
+
+/// D2: 开票日期 in the raw content stream of GBK-EUC-H encoded PDFs.
+/// When the font has no ToUnicode CMap the text layer is garbled, but the raw
+/// content bytes are still plain GBK: ASCII bytes are literal and every byte
+/// ≥ 0x81 leads a 2-byte code. Decode the fragment after the label and match
+/// the date in it.
+fn d2_kaijiao_riqi_gbk(raw: &[u8]) -> Result<Option<Date>> {
+  let Some(pos) = find_subslice(raw, KAIJIAO_RIQI_GBK) else {
+    return Ok(None);
+  };
+  let fragment = &raw[pos + KAIJIAO_RIQI_GBK.len()..];
+  let decoded = decode_gbk_date_fragment(&fragment[..fragment.len().min(40)]);
+  let re = Regex::new(r"(\d{4})年(\d{1,2})月(\d{1,2})日")?;
+  match re.captures(&decoded) {
+    Some(caps) => date_from_caps(&caps),
+    None => Ok(None),
+  }
+}
+
+/// D3: First YYYY年M月D日 found anywhere in the text.
+fn d3_any_date(text: &str) -> Result<Option<Date>> {
+  let re = Regex::new(r"(\d{4})年(\d{1,2})月(\d{1,2})日")?;
+  match re.captures(text) {
+    Some(caps) => date_from_caps(&caps),
+    None => Ok(None),
+  }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+  haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Decode a GBK byte fragment, keeping only what a date needs: ASCII bytes
+/// pass through, full-width digits are mapped to ASCII, and the 2-byte codes
+/// for 年月日 are recognized; every other 2-byte code is skipped.
+fn decode_gbk_date_fragment(bytes: &[u8]) -> String {
+  let mut out = String::new();
+  let mut i = 0;
+  while i < bytes.len() {
+    let b = bytes[i];
+    if b.is_ascii() {
+      out.push(b as char);
+      i += 1;
+    } else if i + 1 < bytes.len() {
+      match [b, bytes[i + 1]] {
+        [0xC4, 0xEA] => out.push('年'),
+        [0xD4, 0xC2] => out.push('月'),
+        [0xC8, 0xD5] => out.push('日'),
+        [0xA3, d @ 0xB0..=0xB9] => out.push((b'0' + (d - 0xB0)) as char),
+        _ => {}
+      }
+      i += 2;
+    } else {
+      i += 1;
+    }
+  }
+  out
+}
 
 // ── amount strategies ────────────────────────────────────────────────────────
 
@@ -688,7 +755,7 @@ mod tests {
   // ── helpers ────────────────────────────────────────────────────────────────
 
   fn parse(text: &str) -> Result<Fapiao> {
-    parse_fapiao(text.to_string())
+    parse_fapiao(text.to_string(), None)
   }
 
   #[test]
@@ -857,6 +924,40 @@ mod tests {
       "发票号码:26429165848005761994\n广州南站\n2026年06月19日\n电子发票（铁路电子客票）\n07:25开\n票价:￥203.00\n开票日期:2026年06月21日\n买票请到12306 发货请到95306\n中国铁路祝您旅途愉快\n",
     )?;
     assert_eq!(result.date, Some(date(2026, 06, 21)));
+    Ok(())
+  }
+
+  #[test]
+  fn test_date_gbk_raw_content_fallback() -> Result<()> {
+    // 12306 railway ticket raw content: GBK bytes for 开票日期：2026年10月29日.
+    let raw = b"...\xBF\xAA\xC6\xB1\xC8\xD5\xC6\xDA:2026\xC4\xEA10\xD4\xC229\xC8\xD5...";
+    assert_eq!(d2_kaijiao_riqi_gbk(raw)?, Some(date(2026, 10, 29)));
+    Ok(())
+  }
+
+  #[test]
+  fn test_date_gbk_raw_content_fullwidth_digits() -> Result<()> {
+    // GBK full-width digits ０-９ are 0xA3B0-0xA3B9.
+    let raw = b"\xBF\xAA\xC6\xB1\xC8\xD5\xC6\xDA\xA3\xBA\xA3\xB2\xA3\xB0\xA3\xB2\xA3\xB6\xC4\xEA\xA3\xB1\xA3\xB0\xD4\xC2\xA3\xB2\xA3\xB9\xC8\xD5";
+    assert_eq!(d2_kaijiao_riqi_gbk(raw)?, Some(date(2026, 10, 29)));
+    Ok(())
+  }
+
+  #[test]
+  fn test_date_gbk_raw_content_absent() -> Result<()> {
+    let raw = b"no label here";
+    assert_eq!(d2_kaijiao_riqi_gbk(raw)?, None);
+    Ok(())
+  }
+
+  #[test]
+  fn test_train_pdf_date_prefers_kaijiao_riqi_over_ride_date() -> Result<()> {
+    // fixtures/train.pdf: the text layer garbles the 开票日期 (2026-10-29),
+    // so a naive first-date fallback would return the ride date 2026-10-27.
+    let bytes = include_bytes!("../fixtures/train.pdf");
+    let out = extract(vec![bytes.to_vec()])?;
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].date, Some(date(2026, 10, 29)));
     Ok(())
   }
 
