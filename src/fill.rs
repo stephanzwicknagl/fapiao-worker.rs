@@ -2,6 +2,7 @@ use std::io::{Cursor, Read, Write};
 
 use crate::Result;
 use crate::model::Fapiao;
+use log::warn;
 
 use jiff::civil::time;
 use umya_spreadsheet::Workbook;
@@ -68,13 +69,15 @@ fn edit_xlsx(mut book: Workbook, fapiaos: Vec<Fapiao>) -> Result<Workbook> {
 
       sheet.cell_mut((2, row)).set_value_number(date);
       sheet.cell_mut((3, row)).set_value_string(n);
-      sheet.cell_mut((7, row)).set_value("1");
       sheet.cell_mut((9, row)).set_value_number(*a);
       sheet.cell_mut((10, row)).set_value_number(*vat_a);
       row = row + 1;
     } else {
-      sheet.cell_mut((11, row)).set_value_string("Skipped");
-      row = row + 1;
+      warn!("Can't do fapiao {:#?}", &fapiao);
+
+      // for debug
+      // sheet.cell_mut((11, row)).set_value_string("Skipped");
+      // row = row + 1;
     }
   }
   let total_sum = fapiaos_for_filling

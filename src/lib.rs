@@ -1,5 +1,6 @@
 mod extract;
 mod fill;
+mod merge;
 mod model;
 
 #[cfg(test)]
@@ -10,6 +11,11 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[wasm_bindgen(start)]
+pub fn init() {
+  console_log::init_with_level(log::Level::Debug).unwrap();
+}
 
 #[wasm_bindgen]
 pub struct FillResult {
@@ -42,6 +48,15 @@ pub fn parse_pdf(bytes_vec: Vec<js_sys::Uint8Array>) -> Result<String, JsError> 
 }
 
 #[wasm_bindgen]
+pub fn merge_sorted_pdfs(
+  pdf_bytes_vec: Vec<js_sys::Uint8Array>,
+) -> Result<js_sys::Uint8Array, JsError> {
+  /// Merge all readable fapiaos from the input PDFs into one new PDF whose
+  /// pages follow the sorted fapiao order (date, then amount descending).
+  todo!()
+}
+
+#[wasm_bindgen]
 pub fn fill_claim_form(
   pdf_bytes_vec: Vec<js_sys::Uint8Array>,
   xlsx_bytes: js_sys::Uint8Array,
@@ -68,9 +83,6 @@ enum Error {
   IoError(#[from] io::Error),
 
   #[error(transparent)]
-  GitError(#[from] lopdf::Error),
-
-  #[error(transparent)]
   RegexError(#[from] regex::Error),
 
   // #[error("can't parse fapiao from page {0}'")]
@@ -92,6 +104,9 @@ enum Error {
 
   #[error(transparent)]
   PdfError(#[from] pdf_oxide::Error),
+
+  #[error("no readable fapiao pages found")]
+  NoFapiaoPages,
 }
 
 #[cfg(test)]
