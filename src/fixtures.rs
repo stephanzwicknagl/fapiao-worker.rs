@@ -1,6 +1,6 @@
 use jiff::{ToSpan, civil::Date};
 
-use crate::model::Fapiao;
+use crate::model::{Fapiao, LocatedFapiao};
 fn base() -> Fapiao {
   Fapiao {
     fapiao_number: Some("12345678".into()),
@@ -48,8 +48,16 @@ pub fn full_fapiao(i: usize) -> Fapiao {
   }
 }
 
-pub fn many(n: usize) -> Vec<Fapiao> {
-  (0..n).rev().map(|i| full_fapiao(i)).collect()
+pub fn many(n: usize) -> Vec<LocatedFapiao> {
+  (0..n)
+    .rev()
+    .map(|i| LocatedFapiao {
+      fapiao: full_fapiao(i),
+      page_number: 1,
+      doc_number: 1,
+      page_amount: 1,
+    })
+    .collect()
 }
 
 pub fn mixed() -> Vec<Fapiao> {

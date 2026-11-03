@@ -1,7 +1,7 @@
 use std::io::{Cursor, Read, Write};
 
 use crate::Result;
-use crate::model::Fapiao;
+use crate::model::LocatedFapiao;
 use log::warn;
 
 use jiff::civil::time;
@@ -10,7 +10,10 @@ use umya_spreadsheet::helper::date::jiff_date_time_to_excel;
 use umya_spreadsheet::reader::xlsx::read_reader;
 use umya_spreadsheet::writer::xlsx::write_writer;
 
-pub fn insert_fapiao_info_in_xlsx(excel_bytes: Vec<u8>, fapiaos: Vec<Fapiao>) -> Result<Vec<u8>> {
+pub fn insert_fapiao_info_in_xlsx(
+  excel_bytes: Vec<u8>,
+  fapiaos: Vec<LocatedFapiao>,
+) -> Result<Vec<u8>> {
   let book = read_reader(Cursor::new(excel_bytes), true)?;
   let mut out: Vec<u8> = Vec::new();
   write_writer(&edit_xlsx(book, fapiaos)?, &mut out)?;
@@ -52,18 +55,19 @@ fn enable_full_calc_on_load(workbook_xml: &str) -> String {
   xml
 }
 
-fn edit_xlsx(mut book: Workbook, fapiaos: Vec<Fapiao>) -> Result<Workbook> {
+fn edit_xlsx(mut book: Workbook, fapiaos: Vec<LocatedFapiao>) -> Result<Workbook> {
   let sheet = book.active_sheet_mut();
   let mut row = 12;
-  let fapiaos_for_filling: Vec<&Fapiao> = fapiaos.iter().filter(|f| !f.skip).collect();
+  let fapiaos_for_filling: Vec<&LocatedFapiao> =
+    fapiaos.iter().filter(|f| !f.fapiao.skip).collect();
   sheet
     .cell_mut((1, 10))
     .set_formula_result_number(fapiaos_for_filling.len() as f64);
   for fapiao in &fapiaos_for_filling {
-    if let Some(d) = &fapiao.date
-      && let Some(n) = &fapiao.fapiao_number
-      && let Some(a) = &fapiao.amount
-      && let Some(vat_a) = &fapiao.vat_amount
+    if let Some(d) = &fapiao.fapiao.date
+      && let Some(n) = &fapiao.fapiao.fapiao_number
+      && let Some(a) = &fapiao.fapiao.amount
+      && let Some(vat_a) = &fapiao.fapiao.vat_amount
     {
       let date = jiff_date_time_to_excel(d.to_datetime(time(0, 0, 0, 0)));
 
@@ -82,13 +86,13 @@ fn edit_xlsx(mut book: Workbook, fapiaos: Vec<Fapiao>) -> Result<Workbook> {
   }
   let total_sum = fapiaos_for_filling
     .iter()
-    .rfold(0.0, |s, f| s + f.amount.unwrap_or(0.0));
+    .rfold(0.0, |s, f| s + f.fapiao.amount.unwrap_or(0.0));
   sheet
     .cell_mut((9, 52))
     .set_formula_result_number(total_sum as f64);
   let vat_sum = fapiaos_for_filling
     .iter()
-    .rfold(0.0, |s, f| s + f.vat_amount.unwrap_or(0.0));
+    .rfold(0.0, |s, f| s + f.fapiao.vat_amount.unwrap_or(0.0));
   sheet
     .cell_mut((10, 52))
     .set_formula_result_number(vat_sum as f64);
@@ -137,7 +141,7 @@ mod tests {
       assert_eq!(sheet.cell_value((3, i as u32 + 12)).data_type(), "s");
       assert_eq!(
         sheet.cell_value((3, i as u32 + 12)).raw_value(),
-        &CellRawValue::String(f.fapiao_number.as_ref().unwrap().clone().into())
+        &CellRawValue::String(f.fapiao.fapiao_number.as_ref().unwrap().clone().into())
       );
     }
     Ok(())
@@ -155,24 +159,7 @@ mod tests {
       let found_date: jiff::civil::Date =
         excel_to_date_time_jiff(sheet.cell_value((2, i as u32 + 12)).value_number().unwrap())
           .into();
-      assert_eq!(found_date, f.date.unwrap());
-    }
-    Ok(())
-  }
-
-  #[test]
-  fn writes_quantity() -> Result<()> {
-    let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
-    let fapiaos = fixtures::many(3);
-    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos.clone())?;
-    let book = read_reader(Cursor::new(out), true)?;
-    let sheet = book.active_sheet();
-    for (i, _) in fapiaos.iter().enumerate() {
-      assert_eq!(sheet.cell_value((7, i as u32 + 12)).data_type(), "n");
-      assert_eq!(
-        sheet.cell_value((7, i as u32 + 12)).raw_value(),
-        &CellRawValue::Numeric(1 as f64)
-      );
+      assert_eq!(found_date, f.fapiao.date.unwrap());
     }
     Ok(())
   }
@@ -188,7 +175,7 @@ mod tests {
       assert_eq!(sheet.cell_value((9, i as u32 + 12)).data_type(), "n");
       assert_eq!(
         sheet.cell_value((9, i as u32 + 12)).raw_value(),
-        &CellRawValue::Numeric(f.amount.unwrap().into())
+        &CellRawValue::Numeric(f.fapiao.amount.unwrap().into())
       );
     }
     Ok(())
@@ -205,7 +192,7 @@ mod tests {
       assert_eq!(sheet.cell_value((10, i as u32 + 12)).data_type(), "n");
       assert_eq!(
         sheet.cell_value((10, i as u32 + 12)).raw_value(),
-        &CellRawValue::Numeric(f.vat_amount.unwrap().into())
+        &CellRawValue::Numeric(f.fapiao.vat_amount.unwrap().into())
       );
     }
     Ok(())

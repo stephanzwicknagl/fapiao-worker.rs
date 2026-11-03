@@ -3,36 +3,40 @@ use pdf_oxide::PdfDocument;
 use regex::Regex;
 
 use crate::Result;
-use crate::model::Fapiao;
+use crate::model::{Fapiao, LocatedFapiao};
 
 const NUM: &str = r"[\d,]+\.?\d*";
 const DAXIE: &str =
   r"[壹贰叁肆伍陆柒捌玖拾零百千万亿佰仟][壹贰叁肆伍陆柒捌玖拾零百千万亿佰仟圆元角分整]{2,}[整]?";
 
-pub fn extract(bytes_vec: Vec<Vec<u8>>) -> Result<Vec<Fapiao>> {
-  let mut fapiaos: Vec<Fapiao> = vec![];
-  for bytes in bytes_vec {
+pub fn extract(bytes_vec: Vec<Vec<u8>>) -> Result<Vec<LocatedFapiao>> {
+  let mut fapiaos: Vec<LocatedFapiao> = vec![];
+  for (doc_number, bytes) in bytes_vec.into_iter().enumerate() {
     let doc = PdfDocument::from_bytes(bytes)?;
     let pages_total = doc.page_count()?;
-    for i in 0..pages_total {
-      let text = doc.extract_text_auto(i)?;
-      let raw = doc.get_page_content_data(i)?;
-      let new = parse_fapiao(text.clone(), raw)?;
+    for page_number in 0..pages_total {
+      let text = doc.extract_text_auto(page_number)?;
+      let raw = doc.get_page_content_data(page_number)?;
+      let fapiao = parse_fapiao(text.clone(), raw)?;
+      let new = LocatedFapiao {
+        fapiao,
+        doc_number,
+        page_number,
+        page_amount: parse_fapiao_page_amount(text.clone())?,
+      };
       fapiaos.push(new);
     }
   }
-  sort_fapiaos(&mut fapiaos);
+  sort_located_fapiaos(&mut fapiaos);
   Ok(fapiaos)
 }
 
 fn sort_fapiaos(fapiaos: &mut Vec<Fapiao>) {
-  fapiaos.sort_unstable_by(|f1, f2| {
-    f1.date.cmp(&f2.date).then_with(|| {
-      f2.amount
-        .partial_cmp(&f1.amount)
-        .unwrap_or_else(|| core::cmp::Ordering::Less)
-    })
-  });
+  fapiaos.sort_unstable();
+}
+
+fn sort_located_fapiaos(fapiaos: &mut Vec<LocatedFapiao>) {
+  fapiaos.sort_unstable();
 }
 
 fn parse_fapiao(text: String, raw_content: Vec<u8>) -> Result<Fapiao> {
@@ -747,6 +751,18 @@ fn approx_eq(a: f32, b: f32, tol: Option<f32>) -> bool {
   (a - b).abs() <= tol_num
 }
 
+fn parse_fapiao_page_amount(text: String) -> Result<usize> {
+  let re = Regex::new(r"共\s*(\d+)\s*页\s*第\s*(\d+)\s*页")?;
+  if let Some(caps) = re.captures(&text)
+    && let Some(total) = caps.get(1)
+  {
+    let as_number = total.as_str().parse::<usize>()?;
+    return Ok(as_number);
+  } else {
+    Ok(1)
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -755,7 +771,7 @@ mod tests {
   // ── helpers ────────────────────────────────────────────────────────────────
 
   fn parse(text: &str) -> Result<Fapiao> {
-    parse_fapiao(text.to_string(), None)
+    parse_fapiao(text.to_string(), Vec::new())
   }
 
   #[test]
@@ -785,7 +801,11 @@ mod tests {
     let fapiaos = extract(vec![buffer])?;
     assert_eq!(fapiaos.len(), 35);
     assert_eq!(
-      fapiaos.iter().filter(|f| f.skip).collect::<Vec<_>>().len(),
+      fapiaos
+        .iter()
+        .filter(|f| f.fapiao.skip)
+        .collect::<Vec<_>>()
+        .len(),
       6
     );
     Ok(())
@@ -957,7 +977,7 @@ mod tests {
     let bytes = include_bytes!("../fixtures/train.pdf");
     let out = extract(vec![bytes.to_vec()])?;
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0].date, Some(date(2026, 10, 29)));
+    assert_eq!(out[0].fapiao.date, Some(date(2026, 10, 29)));
     Ok(())
   }
 

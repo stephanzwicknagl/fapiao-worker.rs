@@ -66,8 +66,8 @@ pub fn fill_claim_form(
 
   let warnings: Vec<String> = fapiaos
     .iter()
-    .filter(|f| f.skip)
-    .filter_map(|f| f.skip_reason.clone())
+    .filter(|f| f.fapiao.skip)
+    .filter_map(|f| f.fapiao.skip_reason.clone())
     .collect();
 
   let out = fill::insert_fapiao_info_in_xlsx(xlsx_bytes.to_vec(), fapiaos)?;
