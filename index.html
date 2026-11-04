@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Fapiao Claim Form Processor</title>
-  <link rel="stylesheet" href="https://unpkg.com/mvp.css">
+  <link rel="stylesheet" href="./vendor/github.com/andybrewer/mvp/mvp.css">
   <style>
     body {
       min-height: 100vh;
@@ -108,11 +108,6 @@
       <input type="file" id="xlsx-input" accept=".xlsx" required>
       <small>The VAT Reimbursement Claim Form (.xlsx). The original is never modified.</small>
 
-      <label class="checkbox-label" for="sorted-pdf-checkbox">
-        <input type="checkbox" id="sorted-pdf-checkbox">
-        Also download my fapiaos merged into one PDF, sorted by date
-      </label>
-
       <button type="submit">
         <span class="spinner" aria-hidden="true">⏳ </span>
         <span class="label">Process and download</span>
@@ -197,10 +192,8 @@
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         );
 
-        if (document.querySelector("#sorted-pdf-checkbox").checked) {
-          const merged = merge_sorted_pdfs(pdfBytes);
-          download(merged, "fapiaos-sorted.pdf", "application/pdf");
-        }
+        const merged = merge_sorted_pdfs(pdfBytes);
+        download(merged, "fapiaos-sorted.pdf", "application/pdf");
 
         renderWarnings(warnings);
       } catch (err) {
