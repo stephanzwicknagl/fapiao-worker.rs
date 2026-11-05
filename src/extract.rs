@@ -31,10 +31,6 @@ pub fn extract(bytes_vec: Vec<Vec<u8>>) -> Result<Vec<LocatedFapiao>> {
   Ok(fapiaos)
 }
 
-fn sort_fapiaos(fapiaos: &mut Vec<Fapiao>) {
-  fapiaos.sort_unstable();
-}
-
 fn sort_located_fapiaos(fapiaos: &mut Vec<LocatedFapiao>) {
   fapiaos.sort_unstable();
 }
@@ -772,6 +768,10 @@ mod tests {
 
   fn parse(text: &str) -> Result<Fapiao> {
     parse_fapiao(text.to_string(), Vec::new())
+  }
+
+  fn sort_fapiaos(fapiaos: &mut Vec<Fapiao>) {
+    fapiaos.sort_unstable();
   }
 
   #[test]
