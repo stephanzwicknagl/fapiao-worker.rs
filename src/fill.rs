@@ -12,7 +12,7 @@ use umya_spreadsheet::writer::xlsx::write_writer;
 
 pub fn insert_fapiao_info_in_xlsx(
   excel_bytes: Vec<u8>,
-  fapiaos: Vec<LocatedFapiao>,
+  fapiaos: &Vec<LocatedFapiao>,
 ) -> Result<Vec<u8>> {
   let book = read_reader(Cursor::new(excel_bytes), true)?;
   let mut out: Vec<u8> = Vec::new();
@@ -55,7 +55,7 @@ fn enable_full_calc_on_load(workbook_xml: &str) -> String {
   xml
 }
 
-fn edit_xlsx(mut book: Workbook, fapiaos: Vec<LocatedFapiao>) -> Result<Workbook> {
+fn edit_xlsx(mut book: Workbook, fapiaos: &Vec<LocatedFapiao>) -> Result<Workbook> {
   let sheet = book.active_sheet_mut();
   let mut row = 12;
   let fapiaos_for_filling: Vec<&LocatedFapiao> =
@@ -112,7 +112,7 @@ mod tests {
   fn errors_on_invalid_xlsx_bytes() {
     let fake_bytes = b"not an xlsx".to_vec();
     let fapiaos = fixtures::many(1);
-    let result = insert_fapiao_info_in_xlsx(fake_bytes, fapiaos);
+    let result = insert_fapiao_info_in_xlsx(fake_bytes, &fapiaos);
     assert!(result.is_err());
   }
 
@@ -120,7 +120,7 @@ mod tests {
   fn forces_full_recalculation_on_load() -> Result<()> {
     let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
     let fapiaos = fixtures::many(3);
-    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos)?;
+    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), &fapiaos)?;
     let mut archive = zip::ZipArchive::new(Cursor::new(out))?;
     let mut xml = String::new();
     archive
@@ -134,7 +134,7 @@ mod tests {
   fn writes_fapiao_number() -> Result<()> {
     let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
     let fapiaos = fixtures::many(3);
-    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos.clone())?;
+    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), &fapiaos)?;
     let book = read_reader(Cursor::new(out), true)?;
     let sheet = book.active_sheet();
     for (i, f) in fapiaos.iter().enumerate() {
@@ -151,7 +151,7 @@ mod tests {
   fn writes_fapiao_date() -> Result<()> {
     let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
     let fapiaos = fixtures::many(3);
-    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos.clone())?;
+    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), &fapiaos)?;
     let book = read_reader(Cursor::new(out), true)?;
     let sheet = book.active_sheet();
     for (i, f) in fapiaos.iter().enumerate() {
@@ -168,7 +168,7 @@ mod tests {
   fn writes_amount() -> Result<()> {
     let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
     let fapiaos = fixtures::many(3);
-    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos.clone())?;
+    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), &fapiaos)?;
     let book = read_reader(Cursor::new(out), true)?;
     let sheet = book.active_sheet();
     for (i, f) in fapiaos.iter().enumerate() {
@@ -185,7 +185,7 @@ mod tests {
   fn writes_vat_amount() -> Result<()> {
     let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
     let fapiaos = fixtures::many(3);
-    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos.clone())?;
+    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), &fapiaos)?;
     let book = read_reader(Cursor::new(out), true)?;
     let sheet = book.active_sheet();
     for (i, f) in fapiaos.iter().enumerate() {
@@ -202,7 +202,7 @@ mod tests {
   fn leaves_remarks_empty() -> Result<()> {
     let bytes_xlsx = include_bytes!("../fixtures/1.xlsx");
     let fapiaos = fixtures::many(3);
-    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), fapiaos.clone())?;
+    let out = insert_fapiao_info_in_xlsx(bytes_xlsx.to_vec(), &fapiaos)?;
     let book = read_reader(Cursor::new(out), true)?;
     let sheet = book.active_sheet();
     for (i, _) in fapiaos.iter().enumerate() {

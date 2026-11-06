@@ -9,10 +9,9 @@ const NUM: &str = r"[\d,]+\.?\d*";
 const DAXIE: &str =
   r"[壹贰叁肆伍陆柒捌玖拾零百千万亿佰仟][壹贰叁肆伍陆柒捌玖拾零百千万亿佰仟圆元角分整]{2,}[整]?";
 
-pub fn extract(bytes_vec: Vec<Vec<u8>>) -> Result<Vec<LocatedFapiao>> {
+pub fn extract(bytes_vec: &Vec<PdfDocument>) -> Result<Vec<LocatedFapiao>> {
   let mut fapiaos: Vec<LocatedFapiao> = vec![];
-  for (doc_number, bytes) in bytes_vec.into_iter().enumerate() {
-    let doc = PdfDocument::from_bytes(bytes)?;
+  for (doc_number, doc) in bytes_vec.into_iter().enumerate() {
     let pages_total = doc.page_count()?;
     for page_number in 0..pages_total {
       let text = doc.extract_text_auto(page_number)?;
@@ -783,22 +782,10 @@ mod tests {
   }
 
   #[test]
-  fn extracts_from_sample_pdf() -> Result<()> {
-    let bytes = include_bytes!("../fixtures/sample.pdf");
-    let out = extract(vec![bytes.to_vec()])?;
-    println!("{:#?}", out);
-    Ok(())
-  }
-
-  use std::fs::File;
-  use std::io::prelude::*;
-
-  #[test]
   fn test_with_real_fapiao() -> Result<()> {
-    let mut f = File::open("fixtures/sample.pdf")?;
-    let mut buffer = Vec::new();
-    f.read_to_end(&mut buffer)?;
-    let fapiaos = extract(vec![buffer])?;
+    let pdf_doc = PdfDocument::from_bytes(include_bytes!("../fixtures/sample.pdf").to_vec())?;
+    let fapiaos = extract(&vec![pdf_doc])?;
+
     assert_eq!(fapiaos.len(), 35);
     assert_eq!(
       fapiaos
@@ -974,8 +961,8 @@ mod tests {
   fn test_train_pdf_date_prefers_kaijiao_riqi_over_ride_date() -> Result<()> {
     // fixtures/train.pdf: the text layer garbles the 开票日期 (2026-10-29),
     // so a naive first-date fallback would return the ride date 2026-10-27.
-    let bytes = include_bytes!("../fixtures/train.pdf");
-    let out = extract(vec![bytes.to_vec()])?;
+    let pdf_doc = PdfDocument::from_bytes(include_bytes!("../fixtures/train.pdf").to_vec())?;
+    let out = extract(&vec![pdf_doc])?;
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].fapiao.date, Some(date(2026, 10, 29)));
     Ok(())

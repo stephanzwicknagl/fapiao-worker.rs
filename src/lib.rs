@@ -6,6 +6,7 @@ mod model;
 #[cfg(test)]
 mod fixtures;
 
+use pdf_oxide::PdfDocument;
 use std::io;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -19,15 +20,21 @@ pub fn init() {
 
 #[wasm_bindgen]
 pub struct FillResult {
-  bytes: js_sys::Uint8Array,
+  bytes_filled: js_sys::Uint8Array,
+  bytes_sorted: js_sys::Uint8Array,
   warnings: Vec<String>,
 }
 
 #[wasm_bindgen]
 impl FillResult {
   #[wasm_bindgen(getter)]
-  pub fn bytes(&self) -> js_sys::Uint8Array {
-    self.bytes.clone()
+  pub fn bytes_filled(&self) -> js_sys::Uint8Array {
+    self.bytes_filled.clone()
+  }
+
+  #[wasm_bindgen(getter)]
+  pub fn bytes_sorted(&self) -> js_sys::Uint8Array {
+    self.bytes_sorted.clone()
   }
 
   #[wasm_bindgen(getter)]
@@ -42,27 +49,37 @@ pub fn greet(name: &str) -> String {
 
 #[wasm_bindgen]
 pub fn parse_pdf(bytes_vec: Vec<js_sys::Uint8Array>) -> Result<String, JsError> {
-  let bytes_vec = bytes_vec.iter().map(|a| a.to_vec()).collect();
-  let fapiaos = extract::extract(bytes_vec)?;
+  let doc = bytes_vec
+    .iter()
+    .map(|a| PdfDocument::from_bytes(a.to_vec()))
+    .collect::<Result<_, _>>()?;
+  let fapiaos = extract::extract(&doc)?;
   Ok(format!("EXTRACTED FAPIOS: {:#?}", fapiaos))
 }
 
 #[wasm_bindgen]
 pub fn merge_sorted_pdfs(
-  pdf_bytes_vec: Vec<js_sys::Uint8Array>,
+  pdf_files_bytes: Vec<js_sys::Uint8Array>,
 ) -> Result<js_sys::Uint8Array, JsError> {
-  /// Merge all readable fapiaos from the input PDFs into one new PDF whose
-  /// pages follow the sorted fapiao order (date, then amount descending).
-  todo!()
+  let pdf_docs = pdf_files_bytes
+    .iter()
+    .map(|a| PdfDocument::from_bytes(a.to_vec()))
+    .collect::<Result<_, _>>()?;
+  let fapiaos = extract::extract(&pdf_docs)?;
+  let merged_pdf = merge::merge_sorted_pdfs(pdf_docs, &fapiaos)?;
+  Ok(js_sys::Uint8Array::from(merged_pdf.as_slice()))
 }
 
 #[wasm_bindgen]
 pub fn fill_claim_form(
-  pdf_bytes_vec: Vec<js_sys::Uint8Array>,
+  pdf_files_bytes: Vec<js_sys::Uint8Array>,
   xlsx_bytes: js_sys::Uint8Array,
 ) -> Result<FillResult, JsError> {
-  let pdf_bytes_vec = pdf_bytes_vec.iter().map(|a| a.to_vec()).collect();
-  let fapiaos = extract::extract(pdf_bytes_vec)?;
+  let pdf_docs: Vec<PdfDocument> = pdf_files_bytes
+    .iter()
+    .map(|a| PdfDocument::from_bytes(a.to_vec()))
+    .collect::<Result<_, _>>()?;
+  let fapiaos = extract::extract(&pdf_docs)?;
 
   let warnings: Vec<String> = fapiaos
     .iter()
@@ -70,9 +87,11 @@ pub fn fill_claim_form(
     .filter_map(|f| f.fapiao.skip_reason.clone())
     .collect();
 
-  let out = fill::insert_fapiao_info_in_xlsx(xlsx_bytes.to_vec(), fapiaos)?;
+  let filled_spreadsheet = fill::insert_fapiao_info_in_xlsx(xlsx_bytes.to_vec(), &fapiaos)?;
+  let merged_pdf = merge::merge_sorted_pdfs(pdf_docs, &fapiaos)?;
   Ok(FillResult {
-    bytes: js_sys::Uint8Array::from(out.as_slice()),
+    bytes_filled: js_sys::Uint8Array::from(filled_spreadsheet.as_slice()),
+    bytes_sorted: js_sys::Uint8Array::from(merged_pdf.as_slice()),
     warnings,
   })
 }

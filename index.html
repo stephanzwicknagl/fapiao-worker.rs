@@ -135,7 +135,7 @@
   <footer>Fapiao Worker — files never leave your computer. All processing is done locally.</footer>
 
   <script type="module">
-    import init, { fill_claim_form, merge_sorted_pdfs } from "./pkg/fapiao_worker.js";
+    import init, { fill_claim_form } from "./pkg/fapiao_worker.js";
     await init();
 
     const form = document.querySelector("#claim-form");
@@ -184,16 +184,15 @@
         );
         const xlsxBytes = new Uint8Array(await xlsxFile.arrayBuffer());
 
-        const { bytes, warnings } = fill_claim_form(pdfBytes, xlsxBytes);
+        const { bytesFilled, bytesSorted, warnings } = fill_claim_form(pdfBytes, xlsxBytes);
 
         download(
-          bytes,
+          bytesFilled,
           xlsxFile.name.replace(/\.xlsx$/i, "") + "-filled.xlsx",
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         );
 
-        const merged = merge_sorted_pdfs(pdfBytes);
-        download(merged, "fapiaos-sorted.pdf", "application/pdf");
+        download(bytesSorted, "fapiaos-sorted.pdf", "application/pdf");
 
         renderWarnings(warnings);
       } catch (err) {
